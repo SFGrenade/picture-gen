@@ -1,0 +1,50 @@
+[0:a]
+  lowpass=frequency=80 : poles=2 : width_type=q : width=1.0 : precision=auto,
+  astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=Peak_level,
+  ametadata=print : key=lavfi.astats.Overall.Peak_level : file='../_internal_levels.log'
+;
+
+
+
+[0:v]
+  format=rgba,
+  scale=flags=16388 : width=1920 : height=1080
+[BG_IN];
+[2:v]
+  format=rgba,
+  sendcmd=filename='../_internal_ball_scale.log',
+  scale@circle=flags=16388 : width=in_w : height=in_h
+[CIRCLE_IN];
+[3:v]
+  format=rgba,
+  scale=flags=16388 : width=917 : height=812
+[ART_IN];
+[1:a]
+  aformat=channel_layouts=mono,
+  showwaves=size=917x387 : rate=$fps : mode=p2p : draw=full : colors=#FF0000FF,
+  format=rgba,
+  dilation,
+  scale=flags=16388 : width=917 : height=387
+[waves];
+[1:a]
+  showfreqs=size=917x387 : rate=$fps : fscale=log : win_size=4096 : colors=#400000FF|#600000FF,
+  format=rgba,
+  scale=flags=16388 : width=917 : height=387
+[freqs];
+[BG_IN][freqs]
+  overlay=format=auto : alpha=straight : eval=init : x=979 : y=24,
+  drawtext=fontfile=C\\:/Windows/Fonts/NotoSans-Regular.ttf : fontsize=60 : textfile=title.txt : fix_bounds=true : fontcolor=#FFFFFFFF : x=1437-(text_w/2) : y=217-(text_h/2)
+[bg+freqs+title];
+[bg+freqs+title][waves]
+  overlay=format=auto : alpha=straight : eval=init : x=979 : y=449
+[bg+title+waves];
+[bg+title+waves][ART_IN]
+  overlay=format=auto : alpha=straight : eval=init : x=24 : y=24
+[bg+title+waves+art];
+[bg+title+waves+art][CIRCLE_IN]
+  overlay=format=auto : alpha=straight : eval=frame : y=964.5-(overlay_h/2) : x=114.5+((1804.5-114.5)*(t/$time))-(overlay_w/2)
+[ready-for-output];
+[ready-for-output]
+  yadif,
+  format=pix_fmts=yuv420p : color_spaces=bt709
+[VIDEO_OUT]

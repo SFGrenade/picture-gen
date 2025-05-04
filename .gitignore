@@ -1,0 +1,7 @@
+**
+!.gitignore
+!*_filter.txt
+!*.png
+!*.ps1
+!*.sh
+!*.py
