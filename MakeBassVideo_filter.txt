@@ -1,5 +1,5 @@
 [0:a]
-  lowpass=frequency=80 : poles=2 : width_type=q : width=1.0 : precision=auto,
+  lowpass=frequency=80 : poles=2 : width_type=q : width=0.707 : precision=auto,
   astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=Peak_level,
   ametadata=print : key=lavfi.astats.Overall.Peak_level : file='../_internal_levels.log'
 ;
@@ -20,14 +20,13 @@
   scale=flags=16388 : width=917 : height=812
 [ART_IN];
 [1:a]
-  aformat=channel_layouts=mono,
-  showwaves=size=917x387 : rate=$fps : mode=p2p : draw=full : colors=#FF0000FF,
+  showwaves=size=917x387 : rate=$fps : mode=p2p : draw=full : colors=#FF0000FF|#AA0000FF,
   format=rgba,
   dilation,
   scale=flags=16388 : width=917 : height=387
 [waves];
 [1:a]
-  showfreqs=size=917x387 : rate=$fps : fscale=log : win_size=4096 : colors=#400000FF|#600000FF,
+  showfreqs=size=917x387 : rate=$fps : fscale=log : win_size=4096 : win_func=flattop : colors=#600000FF|#400000FF,
   format=rgba,
   scale=flags=16388 : width=917 : height=387
 [freqs];
