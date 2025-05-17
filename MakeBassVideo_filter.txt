@@ -1,19 +1,36 @@
 [0:a]
-  lowpass=frequency=80 : poles=2 : width_type=q : width=0.707 : precision=auto,
+  firequalizer=gain_entry='entry(19, -INF); entry(20, 0); entry(100, 0); entry(101, -INF)' : zero_phase=on,
+  astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=Min_level,
+  astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=Max_level,
   astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=Peak_level,
-  ametadata=print : key=lavfi.astats.Overall.Peak_level : file='../_internal_levels.log'
-;
+  astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=RMS_level,
+  ametadata=mode=print : file='../_internal_levels.log'
+[TO_OUT];
 
 
 
+nullsrc=size=1x1 : rate=$fps,
+  sendcmd=filename='../_internal_sendcmd_cmds.log',
+nullsink;
+
+
+
+nullsrc=size=1920x1080 : rate=$fps,
+  sendcmd=filename='../_internal_sendcmd_cmds_dx.log',
+  lut@dx=r='random(1)*255':g='random(1)*255':b='random(1)*255'
+[DISPLACE_1_IN];
+nullsrc=size=1920x1080 : rate=$fps,
+  sendcmd=filename='../_internal_sendcmd_cmds_dy.log',
+  lut@dy=r='random(1)*255':g='random(1)*255':b='random(1)*255'
+[DISPLACE_2_IN];
 [0:v]
   format=rgba,
   scale=flags=16388 : width=1920 : height=1080
 [BG_IN];
 [2:v]
   format=rgba,
-  sendcmd=filename='../_internal_ball_scale.log',
-  scale@circle=flags=16388 : width=in_w : height=in_h
+  sendcmd=filename='../_internal_sendcmd_cmds_b.log',
+  scale@b=flags=16388 : width=in_w : height=in_h
 [CIRCLE_IN];
 [3:v]
   format=rgba,
@@ -43,7 +60,8 @@
 [bg+title+waves+art][CIRCLE_IN]
   overlay=format=auto : alpha=straight : eval=frame : y=964.5-(overlay_h/2) : x=114.5+((1804.5-114.5)*(t/$time))-(overlay_w/2)
 [ready-for-output];
-[ready-for-output]
+[ready-for-output][DISPLACE_1_IN][DISPLACE_2_IN]
+  displace=edge=wrap,
   yadif,
   format=pix_fmts=yuv420p : color_spaces=bt709
 [VIDEO_OUT]
