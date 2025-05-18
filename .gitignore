@@ -1,4 +1,5 @@
 **
+!__src/
 !.gitignore
 !*_filter.txt
 !*.png
