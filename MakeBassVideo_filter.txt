@@ -1,5 +1,5 @@
 [0:a]
-  firequalizer=gain_entry='entry(19, -INF); entry(20, 0); entry(100, 0); entry(101, -INF)' : zero_phase=on,
+  firequalizer=gain_entry='entry(19, -INF); entry(20, 0); entry(100, 0); entry(101, -INF)',
   astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=Min_level,
   astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=Max_level,
   astats=length=1/$fps : metadata=1 : reset=1 : measure_perchannel=none : measure_overall=Peak_level,

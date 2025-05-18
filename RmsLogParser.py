@@ -17,7 +17,7 @@ def normalToDisplaceRandom(normal: float) -> float:
     normal = max(0.0, min(1.0, normal))
     random_value: float = random.uniform(-0.5, 0.5)
     make_it_converge: float = math.pow(normal, 2)  # values towards 0 are more likely, instead of it being linear
-    scale: float = 0.25
+    scale: float = 0.2
     return 0.5 + (random_value * make_it_converge * scale)
 
 def getNormal(value: float, min_val: float, max_val: float) -> float:
@@ -77,7 +77,7 @@ def main() -> None:
             displace_value_y_g: float = normalToDisplaceRandom(relative_max_level)
             displace_value_y_b: float = normalToDisplaceRandom(relative_max_level)
 
-            #tpf_str: str = f"{point_max_level.time_point_from:.3f}"
+            tpf_str: str = f"{point_max_level.time_point_from:.3f}"
             ball_zoom_str: str = f"{ball_zoom:.3f}"
             displace_value_x_r_str: str = f"{displace_value_x_r:.3f}"
             displace_value_x_g_str: str = f"{displace_value_x_g:.3f}"
@@ -85,7 +85,7 @@ def main() -> None:
             displace_value_y_r_str: str = f"{displace_value_y_r:.3f}"
             displace_value_y_g_str: str = f"{displace_value_y_g:.3f}"
             displace_value_y_b_str: str = f"{displace_value_y_b:.3f}"
-            tpf_str: str = f"{point_max_level.time_point_from}"
+            #tpf_str: str = f"{point_max_level.time_point_from}"
             #ball_zoom_str: str = f"{ball_zoom}"
             #displace_value_x_r_str: str = f"{displace_value_x_r}"
             #displace_value_x_g_str: str = f"{displace_value_x_g}"
