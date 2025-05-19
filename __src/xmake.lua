@@ -20,13 +20,9 @@ end
 --add_requireconfs( "*", "**", "*.**", "**.*", "**.**", { configs = { shared = get_config( "kind" ) == "shared" } } )
 add_requireconfs( "*", { configs = { shared = get_config( "kind" ) == "shared" } } )
 
---add_requires( "cairo" )
+add_requires( "cairo" )
 add_requires( "dr_wav" )
 add_requires( "fmt" )
-add_requires( "libsdl2" )
-add_requires( "libsdl2_image" )
-
-add_requireconfs( "libsdl2", { configs = { sdlmain = false } } )
 
 target( "Video-Frame-Generator" )
   set_kind( "binary" )
@@ -34,11 +30,9 @@ target( "Video-Frame-Generator" )
   set_default( true )
   set_group( "EXES" )
 
-  --add_packages( "cairo", { public = true } )
+  add_packages( "cairo", { public = true } )
   add_packages( "dr_wav", { public = true } )
   add_packages( "fmt", { public = true } )
-  add_packages( "libsdl2", { public = true } )
-  add_packages( "libsdl2_image", { public = true } )
 
   add_includedirs( "include", { public = true } )
 

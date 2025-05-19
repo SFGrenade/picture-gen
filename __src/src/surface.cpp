@@ -1,170 +1,250 @@
 #include "surface.h"
 
+#include <cairo-ft.h>
+#include <cairo.h>
 #include <fmt/base.h>
 #include <fmt/chrono.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
+#include <ft2build.h>
 #include <iostream>
 #include <random>
 
-#include "SDL_pixels.h"
-#include "SDL_surface.h"
+#include FT_FREETYPE_H
+
 #include "utils.h"
 
-SDL_Surface* load_image_and_check_surface( std::filesystem::path const& filepath ) {
-  SDL_Surface* file_surface = nullptr;
-  while( file_surface == nullptr ) {
-    file_surface = IMG_Load( filepath.string().c_str() );
+void surface_blit( cairo_surface_t* src, cairo_surface_t* dest, double dest_x, double dest_y, double dest_width, double dest_height ) {
+  double src_width = cairo_image_surface_get_width( src );
+  double src_height = cairo_image_surface_get_height( src );
+
+  cairo_t* cr = cairo_create( dest );
+  cairo_save( cr );
+
+  cairo_translate( cr, dest_x, dest_y );
+  cairo_scale( cr, dest_width / src_width, dest_height / src_height );
+  cairo_set_source_surface( cr, src, 0, 0 );
+  cairo_paint( cr );
+
+  cairo_restore( cr );
+  cairo_destroy( cr );
+}
+
+cairo_surface_t* surface_load_file( std::filesystem::path const& filepath ) {
+  cairo_surface_t* ret = nullptr;
+  while( ( !ret ) || ( cairo_surface_status( ret ) != cairo_status_t::CAIRO_STATUS_SUCCESS ) ) {
+    ret = cairo_image_surface_create_from_png( filepath.string().c_str() );
   }
-  SDL_Surface* ret = nullptr;
-  SDL_Surface* tmp = create_rgb_surface(1, 1);
-  while( ret == nullptr ) {
-    ret = SDL_ConvertSurface(file_surface, tmp->format, tmp->flags);
-  }
-  SDL_FreeSurface(tmp);
-  SDL_FreeSurface(file_surface);
   return ret;
 }
 
-SDL_Surface* create_rgb_surface( int width, int height ) {
-  SDL_Surface* ret = nullptr;
-  while( ret == nullptr ) {
-    ret = SDL_CreateRGBSurface( 0, width, height, 32, 0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF );
+cairo_surface_t* surface_create_size( int32_t width, int32_t height ) {
+  cairo_surface_t* ret = nullptr;
+  while( ( !ret ) || ( cairo_surface_status( ret ) != cairo_status_t::CAIRO_STATUS_SUCCESS ) ) {
+    ret = cairo_image_surface_create( cairo_format_t::CAIRO_FORMAT_ARGB32, width, height );
   }
   return ret;
 }
 
-SDL_Surface* put_surface_into_overlay_at( SDL_Surface* surface,
-                                         int32_t overlay_w,
-                                         int32_t overlay_h,
-                                         int32_t x,
-                                         int32_t y,
-                                         int32_t w,
-                                         int32_t h ) {
-  SDL_Surface* overlay = create_rgb_surface( overlay_w, overlay_h );
+cairo_surface_t* surface_embed_in_overlay( cairo_surface_t* surface,
+                                           int32_t overlay_width,
+                                           int32_t overlay_height,
+                                           double x,
+                                           double y,
+                                           double width,
+                                           double height ) {
+  cairo_surface_t* overlay = surface_create_size( overlay_width, overlay_height );
 
-  SDL_Rect rect;
-  rect.x = x;
-  rect.y = y;
-  rect.w = w;
-  rect.h = h;
-  if( 0 != SDL_BlitScaled( surface, nullptr, overlay, &rect ) ) {
-    std::cerr << fmt::format( "error: SDL_BlitScaled: {}", SDL_GetError() ) << std::endl;
-  }
+  surface_blit( surface, overlay, x, y, width, height );
+
   return overlay;
 }
 
-SDL_Surface* load_image_into_overlay_at( std::filesystem::path const& filepath,
-                                         int32_t overlay_w,
-                                         int32_t overlay_h,
-                                         int32_t x,
-                                         int32_t y,
-                                         int32_t w,
-                                         int32_t h ) {
-  SDL_Surface* surface = load_image_and_check_surface( filepath );
-  SDL_Surface* overlay = put_surface_into_overlay_at( surface, overlay_w, overlay_h, x, y, w, h );
-  SDL_FreeSurface( surface );
+cairo_surface_t* surface_load_file_into_overlay( std::filesystem::path const& filepath,
+                                                 int32_t overlay_width,
+                                                 int32_t overlay_height,
+                                                 int32_t x,
+                                                 int32_t y,
+                                                 int32_t width,
+                                                 int32_t height ) {
+  cairo_surface_t* surface = surface_load_file( filepath );
+  cairo_surface_t* overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
+  cairo_surface_destroy( surface );
   return overlay;
 }
 
-void set_colour_on_surface( SDL_Surface* s, uint32_t pixel ) {
-  for( int y = 0; y < s->h; y++ ) {
-    for( int x = 0; x < s->w; x++ ) {
-      static_cast< uint32_t* >( s->pixels )[( y * ( s->pitch / s->format->BytesPerPixel ) ) + ( x )] = pixel;
+cairo_surface_t* surface_render_text_into_overlay( std::filesystem::path const& filepath,
+                                                   int32_t overlay_width,
+                                                   int32_t overlay_height,
+                                                   int32_t x,
+                                                   int32_t y,
+                                                   int32_t width,
+                                                   int32_t height ) {
+  std::filesystem::path const font_path = std::filesystem::path( "C:" ) / "Windows" / "Fonts" / "NotoSans-Regular.ttf";
+  int const font_size = 60;
+  double const line_spacing = 1.1;
+
+  std::ifstream file_stream( filepath );
+  std::string file_content( ( std::istreambuf_iterator< char >( file_stream ) ), ( std::istreambuf_iterator< char >() ) );
+  file_content = replace( file_content, "\r\n", "\n" );
+  std::vector< std::string > content_lines = split_multiline( file_content );
+
+  cairo_surface_t* surface = surface_create_size( width, height );
+  {
+    cairo_t* cr = cairo_create( surface );
+    cairo_save( cr );
+
+    cairo_font_options_t* cairo_ft_options = cairo_font_options_create();
+    cairo_font_options_set_antialias( cairo_ft_options, cairo_antialias_t::CAIRO_ANTIALIAS_GRAY );
+
+    cairo_font_face_t* cairo_ft_face = nullptr;
+    FT_Library ft_library;
+    if( 0 == FT_Init_FreeType( &ft_library ) ) {
+      FT_Face ft_face;
+      if( 0 == FT_New_Face( ft_library, font_path.string().c_str(), 0, &ft_face ) ) {
+        cairo_ft_face = cairo_ft_font_face_create_for_ft_face( ft_face, 0 );
+        FT_Done_Face( ft_face );
+      }
+      FT_Done_FreeType( ft_library );
     }
+    cairo_set_font_face( cr, cairo_ft_face );
+    cairo_set_font_size( cr, font_size );
+    cairo_set_source_rgb( cr, 1, 1, 1 );
+
+    double line_height = font_size * line_spacing;
+    double total_text_height = content_lines.size() * line_height;
+
+    // starting height
+    double y = ( ( height - total_text_height ) / 2.0 ) + ( font_size / line_spacing );
+    for( std::string const& content_line : content_lines ) {
+      cairo_text_extents_t extents;
+      cairo_text_extents( cr, content_line.c_str(), &extents );
+      double x = ( width - extents.width ) / 2.0 - extents.x_bearing;
+
+      cairo_move_to( cr, x, y );
+      cairo_show_text( cr, content_line.c_str() );
+      y += line_height;
+    }
+
+    cairo_restore( cr );
+    cairo_destroy( cr );
+    cairo_font_face_destroy( cairo_ft_face );
+    cairo_font_options_destroy( cairo_ft_options );
   }
+
+  cairo_surface_t* overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
+  cairo_surface_destroy( surface );
+  return overlay;
 }
 
-SDL_Surface* copy_surface( SDL_Surface* s ) {
-  SDL_Surface* ret = create_rgb_surface( s->w, s->h );
-  for( int y = 0; y < s->h; y++ ) {
-    for( int x = 0; x < s->w; x++ ) {
-      set_pixel( ret, x, y, get_pixel( s, x, y ) );
-    }
-  }
+void surface_fill( cairo_surface_t* s, double r, double g, double b, double a ) {
+  cairo_t* cr = cairo_create( s );
+  cairo_save( cr );
+
+  cairo_set_source_rgb( cr, r, g, b );
+  cairo_paint_with_alpha( cr, a );
+
+  cairo_restore( cr );
+  cairo_destroy( cr );
+}
+
+cairo_surface_t* surface_copy( cairo_surface_t* s ) {
+  double s_width = cairo_image_surface_get_width( s );
+  double s_height = cairo_image_surface_get_height( s );
+  cairo_surface_t* ret = surface_create_size( s_width, s_height );
+  surface_blit( s, ret, 0, 0, s_width, s_height );
   return ret;
 }
 
-uint32_t get_pixel( SDL_Surface* s, size_t x, size_t y ) {
-  return static_cast< uint32_t* >( s->pixels )[( y * ( s->pitch / s->format->BytesPerPixel ) ) + ( x )];
+static uint8_t int_surface_unpremultiply( uint8_t channel, uint8_t alpha ) {
+  if( alpha == 0 )
+    return 0;
+  return std::clamp( std::round( ( double( channel ) * 255.0 + double( alpha ) / 2.0 ) / double( alpha ) ), 0.0, 255.0 );
 }
 
-uint8_t get_pixel_r( SDL_Surface* s, size_t x, size_t y ) {
-  return static_cast< uint8_t >( ( get_pixel( s, x, y ) >> ( 3 * 8 ) ) & 0xFF );
+static uint8_t int_surface_premultiply( uint8_t channel, uint8_t alpha ) {
+  return std::clamp( std::round( double( channel ) * ( double( alpha ) / 255.0 ) ), 0.0, 255.0 );
 }
 
-uint8_t get_pixel_g( SDL_Surface* s, size_t x, size_t y ) {
-  return static_cast< uint8_t >( ( get_pixel( s, x, y ) >> ( 2 * 8 ) ) & 0xFF );
-}
+/**
+ * @brief blit single channel from src to dst
+ *
+ * @param src source
+ * @param dst destination
+ * @param channel_offset 0 = blue, 1 = green, 2 = red
+ * @param x_offset x offset
+ * @param y_offset y offset
+ */
+void int_surface_blit_channel( cairo_surface_t* src, cairo_surface_t* dst, int32_t channel_offset, int32_t x_offset, int32_t y_offset ) {
+  cairo_surface_flush( src );
+  cairo_surface_flush( dst );
 
-uint8_t get_pixel_b( SDL_Surface* s, size_t x, size_t y ) {
-  return static_cast< uint8_t >( ( get_pixel( s, x, y ) >> ( 1 * 8 ) ) & 0xFF );
-}
+  uint8_t* src_data = static_cast< uint8_t* >( cairo_image_surface_get_data( src ) );
+  uint8_t* dst_data = static_cast< uint8_t* >( cairo_image_surface_get_data( dst ) );
 
-uint8_t get_pixel_a( SDL_Surface* s, size_t x, size_t y ) {
-  return static_cast< uint8_t >( ( get_pixel( s, x, y ) >> ( 0 * 8 ) ) & 0xFF );
-}
+  int32_t src_stride = cairo_image_surface_get_stride( src );
+  int32_t dst_stride = cairo_image_surface_get_stride( dst );
 
-void set_pixel( SDL_Surface* s, size_t x, size_t y, uint32_t pixel ) {
-  static_cast< uint32_t* >( s->pixels )[( y * ( s->pitch / s->format->BytesPerPixel ) ) + ( x )] = pixel;
-}
+  int32_t width = cairo_image_surface_get_width( src );
+  int32_t height = cairo_image_surface_get_height( src );
+  int32_t dest_width = cairo_image_surface_get_width( dst );
+  int32_t dest_height = cairo_image_surface_get_height( dst );
 
-void set_pixel_rgba( SDL_Surface* s, size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a ) {
-  uint32_t pixel = 0x00000000;
-  pixel = pixel | ( static_cast< uint32_t >( r & 0xFF ) << ( 3 * 8 ) );
-  pixel = pixel | ( static_cast< uint32_t >( g & 0xFF ) << ( 2 * 8 ) );
-  pixel = pixel | ( static_cast< uint32_t >( b & 0xFF ) << ( 1 * 8 ) );
-  pixel = pixel | ( static_cast< uint32_t >( a & 0xFF ) << ( 0 * 8 ) );
-  set_pixel( s, x, y, pixel );
-}
+  for( int32_t y = 0; y < height; ++y ) {
+    for( int32_t x = 0; x < width; ++x ) {
+      int32_t src_idx = y * src_stride + x * 4;
+      uint8_t src_alpha = src_data[src_idx + 3];
+      uint8_t src_val_premult = src_data[src_idx + channel_offset];
 
-void set_big_pixel( SDL_Surface* s, size_t x, size_t y, uint32_t pixel ) {
-  size_t from_x;
-  size_t from_y;
-  size_t to_x;
-  size_t to_y;
+      uint8_t src_val = int_surface_unpremultiply( src_val_premult, src_alpha );
 
-  if (x == 0) {
-    from_x = x;
-  } else {
-    from_x = x - 1;
-  }
-  if (y == 0) {
-    from_y = y;
-  } else {
-    from_y = y - 1;
-  }
-  if (x == s->w - 1) {
-    to_x = x;
-  } else {
-    to_x = x + 1;
-  }
-  if (y == s->h - 1) {
-    to_y = y;
-  } else {
-    to_y = y + 1;
-  }
+      int32_t dst_x = my_mod( x + x_offset, dest_width );
+      int32_t dst_y = my_mod( y + y_offset, dest_height );
 
-  for (size_t n_y = from_y; n_y <= to_y; n_y++) {
-    for (size_t n_x = from_x; n_x <= to_x; n_x++) {
-      set_pixel(s, n_x, n_y, pixel);
+      int32_t dst_idx = dst_y * dst_stride + dst_x * 4;
+      uint8_t dst_alpha = src_alpha;  // dst_data[dst_idx + 3];
+
+      dst_data[dst_idx + channel_offset] = int_surface_premultiply( src_val, dst_alpha );
     }
   }
+
+  cairo_surface_mark_dirty( dst );
 }
 
-void set_big_pixel_rgba( SDL_Surface* s, size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a ) {
-  uint32_t pixel = 0x00000000;
-  pixel = pixel | ( static_cast< uint32_t >( r & 0xFF ) << ( 3 * 8 ) );
-  pixel = pixel | ( static_cast< uint32_t >( g & 0xFF ) << ( 2 * 8 ) );
-  pixel = pixel | ( static_cast< uint32_t >( b & 0xFF ) << ( 1 * 8 ) );
-  pixel = pixel | ( static_cast< uint32_t >( a & 0xFF ) << ( 0 * 8 ) );
-  set_big_pixel( s, x, y, pixel );
+void surface_set_alpha( cairo_surface_t* src ) {
+  int32_t src_width = cairo_image_surface_get_width( src );
+  int32_t src_height = cairo_image_surface_get_height( src );
+  int32_t src_stride = cairo_image_surface_get_stride( src );
+
+  cairo_surface_flush( src );
+
+  uint8_t* src_data = static_cast< uint8_t* >( cairo_image_surface_get_data( src ) );
+
+  for( int32_t y = 0; y < src_height; ++y ) {
+    for( int32_t x = 0; x < src_width; ++x ) {
+      int32_t src_idx = y * src_stride + x * 4;
+
+      uint8_t src_red = src_data[src_idx + 2];
+      uint8_t src_green = src_data[src_idx + 1];
+      uint8_t src_blue = src_data[src_idx + 0];
+      uint8_t src_alpha = src_data[src_idx + 3];
+
+      src_data[src_idx + 3] = std::max( std::max( src_red, src_green ), src_blue );
+    }
+  }
+
+  cairo_surface_mark_dirty( src );
 }
 
-void shake_and_blit_surface( SDL_Surface* source, SDL_Surface* dest, double shake_intensity, bool red_only ) {
-  SDL_Surface* shaken = create_rgb_surface( source->w, source->h );
-  set_colour_on_surface( shaken, 0x000000FF );
+void surface_shake_and_blit( cairo_surface_t* source, cairo_surface_t* dest, double shake_intensity, bool red_only ) {
+  int32_t source_width = cairo_image_surface_get_width( source );
+  int32_t source_height = cairo_image_surface_get_height( source );
+  int32_t dest_width = cairo_image_surface_get_width( dest );
+  int32_t dest_height = cairo_image_surface_get_height( dest );
+
+  cairo_surface_t* shaken = surface_create_size( source_width, source_height );
+  surface_fill( shaken, 0.0, 0.0, 0.0, 1.0 );
 
   std::random_device random_device;
   std::mt19937_64 gen( random_device() );
@@ -178,43 +258,16 @@ void shake_and_blit_surface( SDL_Surface* source, SDL_Surface* dest, double shak
   int32_t y_offset_blue = dist( gen );
   // int32_t x_offset_alpha = 0;
   // int32_t y_offset_alpha = 0;
-
-  for( int32_t y = 0; y < source->h; y++ ) {
-    int32_t y_red = my_mod( y + y_offset_red, source->h );
-    int32_t y_green = my_mod( y + y_offset_green, source->h );
-    int32_t y_blue = my_mod( y + y_offset_blue, source->h );
-    // int32_t y_alpha = my_mod( y + y_offset_alpha, source->h );
-    if (red_only) {
-      y_green = y_red;
-      y_blue = y_red;
-    }
-    for( int32_t x = 0; x < source->w; x++ ) {
-      int32_t x_red = my_mod( x + x_offset_red, source->w );
-      int32_t x_green = my_mod( x + x_offset_green, source->w );
-      int32_t x_blue = my_mod( x + x_offset_blue, source->w );
-      // int32_t x_alpha = my_mod( x + x_offset_alpha, source->w );
-      if (red_only) {
-        x_green = x_red;
-        x_blue = x_red;
-      }
-
-      uint8_t alpha = static_cast< uint8_t >( ( static_cast< uint32_t >( get_pixel_a( source, x_red, y_red ) )
-                                                + static_cast< uint32_t >( get_pixel_a( source, x_green, y_green ) )
-                                                + static_cast< uint32_t >( get_pixel_a( source, x_blue, y_blue ) ) )
-                                              / 3 );
-
-      set_pixel_rgba( shaken,
-                      x,
-                      y,
-                      get_pixel_r( source, x_red, y_red ),
-                      get_pixel_g( source, x_green, y_green ),
-                      get_pixel_b( source, x_blue, y_blue ),
-                      alpha );
-    }
+  if( red_only ) {
+    x_offset_blue = x_offset_green = x_offset_red;
+    y_offset_blue = y_offset_green = y_offset_red;
   }
 
-  if( 0 != SDL_BlitScaled( shaken, nullptr, dest, nullptr ) ) {
-    std::cerr << fmt::format( "error: SDL_BlitScaled: {}", SDL_GetError() ) << std::endl;
-  }
-  SDL_FreeSurface( shaken );
+  int_surface_blit_channel( source, shaken, 2, x_offset_red, y_offset_red );
+  int_surface_blit_channel( source, shaken, 1, x_offset_green, y_offset_green );
+  int_surface_blit_channel( source, shaken, 0, x_offset_blue, y_offset_blue );
+  surface_set_alpha( shaken );
+
+  surface_blit( shaken, dest, 0, 0, dest_width, dest_height );
+  cairo_surface_destroy( shaken );
 }

@@ -1,44 +1,41 @@
 #pragma once
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_image.h>
+#include <cairo.h>
 #include <cstdint>
 #include <filesystem>
 
-SDL_Surface* load_image_and_check_surface( std::filesystem::path const& filepath );
+void surface_blit( cairo_surface_t* src, cairo_surface_t* dest, double dest_x, double dest_y, double dest_width, double dest_height );
 
-SDL_Surface* create_rgb_surface( int width, int height );
+cairo_surface_t* surface_load_file( std::filesystem::path const& filepath );
 
-SDL_Surface* put_surface_into_overlay_at( SDL_Surface* surface,
-                                         int32_t overlay_w,
-                                         int32_t overlay_h,
-                                         int32_t x,
-                                         int32_t y,
-                                         int32_t w,
-                                         int32_t h );
+cairo_surface_t* surface_create_size( int32_t width, int32_t height );
 
-SDL_Surface* load_image_into_overlay_at( std::filesystem::path const& filepath,
-                                         int32_t overlay_w,
-                                         int32_t overlay_h,
-                                         int32_t x,
-                                         int32_t y,
-                                         int32_t w,
-                                         int32_t h );
+cairo_surface_t* surface_embed_in_overlay( cairo_surface_t* surface,
+                                           int32_t overlay_width,
+                                           int32_t overlay_height,
+                                           double x,
+                                           double y,
+                                           double width,
+                                           double height );
 
-void set_colour_on_surface( SDL_Surface* s, uint32_t pixel );
+cairo_surface_t* surface_load_file_into_overlay( std::filesystem::path const& filepath,
+                                                 int32_t overlay_width,
+                                                 int32_t overlay_height,
+                                                 int32_t x,
+                                                 int32_t y,
+                                                 int32_t width,
+                                                 int32_t height );
 
-SDL_Surface* copy_surface( SDL_Surface* s );
+cairo_surface_t* surface_render_text_into_overlay( std::filesystem::path const& filepath,
+                                                   int32_t overlay_width,
+                                                   int32_t overlay_height,
+                                                   int32_t x,
+                                                   int32_t y,
+                                                   int32_t width,
+                                                   int32_t height );
 
-uint32_t get_pixel( SDL_Surface* s, size_t x, size_t y );
-uint8_t get_pixel_r( SDL_Surface* s, size_t x, size_t y );
-uint8_t get_pixel_g( SDL_Surface* s, size_t x, size_t y );
-uint8_t get_pixel_b( SDL_Surface* s, size_t x, size_t y );
-uint8_t get_pixel_a( SDL_Surface* s, size_t x, size_t y );
+void surface_fill( cairo_surface_t* s, double r, double g, double b, double a );
 
-void set_pixel( SDL_Surface* s, size_t x, size_t y, uint32_t pixel );
-void set_pixel_rgba( SDL_Surface* s, size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a );
+cairo_surface_t* surface_copy( cairo_surface_t* s );
 
-void set_big_pixel( SDL_Surface* s, size_t x, size_t y, uint32_t pixel );
-void set_big_pixel_rgba( SDL_Surface* s, size_t x, size_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a );
-
-void shake_and_blit_surface( SDL_Surface* source, SDL_Surface* dest, double shake_intensity = 1.0, bool red_only = false );
+void surface_shake_and_blit( cairo_surface_t* source, cairo_surface_t* dest, double shake_intensity = 1.0, bool red_only = false );
