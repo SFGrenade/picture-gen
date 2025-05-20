@@ -16,10 +16,13 @@ if is_plat( "windows" ) then
 else
 end
 
+includes( "deps" )
+
 --add_requireconfs( "*", "**", "*.**", "**.*", "**.**", { system = false } )
 --add_requireconfs( "*", "**", "*.**", "**.*", "**.**", { configs = { shared = get_config( "kind" ) == "shared" } } )
 add_requireconfs( "*", { configs = { shared = get_config( "kind" ) == "shared" } } )
 
+add_requires( "iir1" )
 add_requires( "cairo" )
 add_requires( "dr_wav" )
 add_requires( "fmt" )
@@ -30,6 +33,7 @@ target( "Video-Frame-Generator" )
   set_default( true )
   set_group( "EXES" )
 
+  add_packages( "iir1", { public = true } )
   add_packages( "cairo", { public = true } )
   add_packages( "dr_wav", { public = true } )
   add_packages( "fmt", { public = true } )

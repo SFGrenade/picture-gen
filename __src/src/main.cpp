@@ -1,4 +1,5 @@
 #define DR_WAV_IMPLEMENTATION
+#include <Iir.h>
 #include <cairo.h>
 #include <dr_wav.h>
 #include <filesystem>
@@ -43,8 +44,16 @@ struct AudioData {
   uint32_t channels;
   uint32_t sample_rate;
   size_t total_pcm_frame_count;
-  float* sample_data;
+  float* sample_data = nullptr;
+  float* processed_sample_data = nullptr;
   double duration;
+
+  ~AudioData() {
+    if( sample_data )
+      drwav_free( sample_data, NULL );
+    if( processed_sample_data )
+      delete[] processed_sample_data;
+  }
 };
 
 struct ThreadInputData {
@@ -53,12 +62,59 @@ struct ThreadInputData {
   std::filesystem::path project_temp_pictureset_picture_path;
   size_t pcm_frame_offset_from;
   size_t pcm_frame_offset_to;
-  AudioData* audio_data_ptr;
-  cairo_surface_t* project_common_bg_surface;
-  cairo_surface_t* project_common_circle_surface;
-  cairo_surface_t* project_art_surface;
-  cairo_surface_t* static_text_surface;
+  AudioData* audio_data_ptr = nullptr;
+  cairo_surface_t* project_common_bg_surface = nullptr;
+  cairo_surface_t* project_common_circle_surface = nullptr;
+  cairo_surface_t* project_art_surface = nullptr;
+  cairo_surface_t* static_text_surface = nullptr;
 };
+
+void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
+                                    std::filesystem::path const& project_folder,
+                                    float lowpass_cutoff = 100.0,
+                                    float highpass_cutoff = 20.0 ) {
+  size_t sample_amount = audio_data_ptr->total_pcm_frame_count * audio_data_ptr->channels;
+
+  if( audio_data_ptr->processed_sample_data ) {
+    delete[] audio_data_ptr->processed_sample_data;
+  }
+  audio_data_ptr->processed_sample_data = new float[sample_amount];
+  memset( audio_data_ptr->processed_sample_data, 0, sample_amount * sizeof( audio_data_ptr->processed_sample_data[0] ) );
+
+  const int lowpass_order = 4;
+  const int highpass_order = 4;
+
+  Iir::Butterworth::LowPass< lowpass_order > lowpass;
+  lowpass.setup( audio_data_ptr->sample_rate, lowpass_cutoff );
+  Iir::Butterworth::HighPass< highpass_order > highpass;
+  highpass.setup( audio_data_ptr->sample_rate, highpass_cutoff );
+
+  // fill buf1 into audio_data_ptr
+  for( size_t i = 0; i < sample_amount; i++ ) {
+    float lowpassed_sample = lowpass.filter( audio_data_ptr->sample_data[i] );
+    float highpassed_sample = highpass.filter( lowpassed_sample );
+    audio_data_ptr->processed_sample_data[i] = highpassed_sample;
+  }
+
+  drwav dw_obj;
+  drwav_data_format dw_fmt;
+  dw_fmt.container = drwav_container::drwav_container_riff;
+  dw_fmt.format = DR_WAVE_FORMAT_IEEE_FLOAT;
+  dw_fmt.channels = audio_data_ptr->channels;
+  dw_fmt.sampleRate = audio_data_ptr->sample_rate;
+  dw_fmt.bitsPerSample = 32;
+  {
+    std::filesystem::path tmp_audio_path( project_folder / fmt::format( "__filtered_{}_{}.wav", lowpass_cutoff, highpass_cutoff ) );
+    if( std::filesystem::is_regular_file( tmp_audio_path ) ) {
+      std::filesystem::remove( tmp_audio_path );
+    }
+    if( drwav_init_file_write( &dw_obj, tmp_audio_path.string().c_str(), &dw_fmt, nullptr ) ) {
+      drwav_uint64 framesWritten = drwav_write_pcm_frames( &dw_obj, audio_data_ptr->total_pcm_frame_count, audio_data_ptr->processed_sample_data );
+      std::cout << fmt::format( "framesWritten: {}", framesWritten ) << std::endl;
+      drwav_uninit( &dw_obj );
+    }
+  }
+}
 
 void save_surface( cairo_surface_t* surface, std::filesystem::path const& filepath ) {
   cairo_status_t status = cairo_surface_write_to_png( surface, filepath.string().c_str() );
@@ -83,6 +139,11 @@ void draw_samples_on_surface( cairo_surface_t* surface, AudioData* audio_data_pt
   double x = 0;
   double y = middle_y;
   // std::cout << fmt::format( "draw_samples_on_surface - {} frames for {} pixels", frame_duration, surface_w ) << std::endl;
+
+  cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
+  // default is 2
+  cairo_set_line_width( cr, 3 );
+
   for( int c = audio_data_ptr->channels - 1; c >= 0; c-- ) {
     prev_x = 0;
     prev_y = middle_y;
@@ -148,7 +209,18 @@ void thread_run( std::vector< ThreadInputData > const& inputs ) {
     surface_fill( frame_surface_to_save, 0.0, 0.0, 0.0, 1.0 );
 
     // range: 0.0 - 1.0
-    double sound_intensity = 1.0;
+    float min_sample_value = 0.0;
+    float max_sample_value = 0.0;
+    for( size_t i = input_data.pcm_frame_offset_from; i <= input_data.pcm_frame_offset_to; i++ ) {
+      for( size_t c = 0; c <= input_data.audio_data_ptr->channels; c++ ) {
+        size_t sample_index = ( i * input_data.audio_data_ptr->channels ) + c;
+        float sample = input_data.audio_data_ptr->processed_sample_data[sample_index];
+        min_sample_value = std::min( min_sample_value, sample );
+        max_sample_value = std::max( max_sample_value, sample );
+      }
+    }
+
+    double sound_intensity = ( std::abs( min_sample_value ) + std::abs( max_sample_value ) ) / 2.0f;
     double circle_intensity_scale = 0.5;
     double colour_displace_intensity_scale = 0.2;
 
@@ -269,6 +341,9 @@ int main( int argc, char** argv ) {
   std::cout << fmt::format( "project_audio_data.total_pcm_frame_count: {}", project_audio_data.total_pcm_frame_count ) << std::endl;
   project_audio_data.duration = static_cast< double >( project_audio_data.total_pcm_frame_count ) / static_cast< double >( project_audio_data.sample_rate );
   std::cout << fmt::format( "project_audio_data.duration: {}", project_audio_data.duration ) << std::endl;
+
+  std::cout << fmt::format( "create_lowpass_for_audio_data..." ) << std::endl;
+  create_lowpass_for_audio_data( &project_audio_data, project_folder, 100.0, 20.0 );
 
   size_t amount_output_frames = static_cast< size_t >( std::ceil( project_audio_data.duration * fps ) );
   std::cout << fmt::format( "amount_output_frames: {}", amount_output_frames ) << std::endl;
