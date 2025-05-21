@@ -15,6 +15,6 @@ T my_mod( T a, T b ) {
   return a;
 }
 
-std::string replace(std::string const& source, std::string const& from, std::string const& to );
+std::string replace( std::string const& source, std::string const& from, std::string const& to );
 
-std::vector<std::string> split_multiline(std::string const& str );
+std::vector< std::string > split_multiline( std::string const& str );

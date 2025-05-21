@@ -1,7 +1,8 @@
 #include "utils.h"
 
-#include <random>
 #include <sstream>
+
+#include "loggerFactory.h"
 
 std::string replace( std::string const& source, std::string const& from, std::string const& to ) {
   std::string ret = source;
@@ -15,13 +16,13 @@ std::string replace( std::string const& source, std::string const& from, std::st
   return ret;
 }
 
-std::vector<std::string> split_multiline(std::string const& str ) {
-  std::vector<std::string> ret;
+std::vector< std::string > split_multiline( std::string const& str ) {
+  std::vector< std::string > ret;
   std::string line;
-  std::istringstream ss(str);
-  while (std::getline(ss, line)) {
-    if (line.size() > 0) {
-      ret.push_back(line);
+  std::istringstream ss( str );
+  while( std::getline( ss, line ) ) {
+    if( line.size() > 0 ) {
+      ret.push_back( line );
     }
   }
   return ret;

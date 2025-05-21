@@ -1,6 +1,7 @@
 #define DR_WAV_IMPLEMENTATION
 #include <Iir.h>
 #include <cairo.h>
+#include <cmath>
 #include <dr_wav.h>
 #include <filesystem>
 #include <fmt/base.h>
@@ -8,15 +9,19 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
-#include <iostream>
+#include <numbers>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "loggerFactory.h"
 #include "surface.h"
 #include "utils.h"
 
-std::vector< std::string > parse_args( int argc, char** argv ) {
+std::vector< std::string > parse_args( int const argc, char const* const* const argv ) {
+  spdlogger logger = LoggerFactory::get_logger( "parse_args" );
+  logger->trace( "enter: argc: {}, argv: {}", argc, static_cast< void const* >( argv ) );
+
   std::vector< std::string > args;
   std::string tmp_arg;
   std::string tmp_multi_arg;
@@ -37,6 +42,8 @@ std::vector< std::string > parse_args( int argc, char** argv ) {
       args.push_back( tmp_arg );
     }
   }
+
+  logger->trace( "exit" );
   return args;
 }
 
@@ -60,8 +67,8 @@ struct ThreadInputData {
   size_t i;
   size_t amount_output_frames;
   std::filesystem::path project_temp_pictureset_picture_path;
-  size_t pcm_frame_offset_from;
-  size_t pcm_frame_offset_to;
+  size_t pcm_frame_offset;
+  size_t pcm_frame_count;
   AudioData* audio_data_ptr = nullptr;
   cairo_surface_t* project_common_bg_surface = nullptr;
   cairo_surface_t* project_common_circle_surface = nullptr;
@@ -71,8 +78,15 @@ struct ThreadInputData {
 
 void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
                                     std::filesystem::path const& project_folder,
-                                    float lowpass_cutoff = 100.0,
-                                    float highpass_cutoff = 20.0 ) {
+                                    float const lowpass_cutoff = 100.0,
+                                    float const highpass_cutoff = 20.0 ) {
+  spdlogger logger = LoggerFactory::get_logger( "create_lowpass_for_audio_data" );
+  logger->trace( "enter: audio_data_ptr: {}, project_folder: {:?}, lowpass_cutoff: {}, highpass_cutoff: {}",
+                 static_cast< void* >( audio_data_ptr ),
+                 project_folder.string(),
+                 lowpass_cutoff,
+                 highpass_cutoff );
+
   size_t sample_amount = audio_data_ptr->total_pcm_frame_count * audio_data_ptr->channels;
 
   if( audio_data_ptr->processed_sample_data ) {
@@ -81,8 +95,8 @@ void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
   audio_data_ptr->processed_sample_data = new float[sample_amount];
   memset( audio_data_ptr->processed_sample_data, 0, sample_amount * sizeof( audio_data_ptr->processed_sample_data[0] ) );
 
-  const int lowpass_order = 4;
-  const int highpass_order = 4;
+  const int lowpass_order = 8;
+  const int highpass_order = 8;
 
   Iir::Butterworth::LowPass< lowpass_order > lowpass;
   lowpass.setup( audio_data_ptr->sample_rate, lowpass_cutoff );
@@ -110,20 +124,34 @@ void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
     }
     if( drwav_init_file_write( &dw_obj, tmp_audio_path.string().c_str(), &dw_fmt, nullptr ) ) {
       drwav_uint64 framesWritten = drwav_write_pcm_frames( &dw_obj, audio_data_ptr->total_pcm_frame_count, audio_data_ptr->processed_sample_data );
-      std::cout << fmt::format( "framesWritten: {}", framesWritten ) << std::endl;
+      logger->debug( "framesWritten: {}", framesWritten );
       drwav_uninit( &dw_obj );
     }
   }
+
+  logger->trace( "exit" );
 }
 
 void save_surface( cairo_surface_t* surface, std::filesystem::path const& filepath ) {
+  spdlogger logger = LoggerFactory::get_logger( "save_surface" );
+  logger->trace( "enter: surface: {}, filepath: {:?}", static_cast< void* >( surface ), filepath.string() );
+
   cairo_status_t status = cairo_surface_write_to_png( surface, filepath.string().c_str() );
   if( status != cairo_status_t::CAIRO_STATUS_SUCCESS ) {
-    std::cerr << fmt::format( "error in save_surface: {}", cairo_status_to_string( status ) ) << std::endl;
+    logger->error( "error in save_surface: {}", cairo_status_to_string( status ) );
   }
+
+  logger->trace( "exit" );
 }
 
-void draw_samples_on_surface( cairo_surface_t* surface, AudioData* audio_data_ptr, size_t pcm_frame_offset_from, size_t pcm_frame_offset_to ) {
+void draw_samples_on_surface( cairo_surface_t* surface, AudioData const* audio_data_ptr, size_t const pcm_frame_offset, size_t const pcm_frame_count ) {
+  spdlogger logger = LoggerFactory::get_logger( "draw_samples_on_surface" );
+  logger->trace( "enter: surface: {}, audio_data_ptr: {}, pcm_frame_offset: {}, pcm_frame_count: {}",
+                 static_cast< void* >( surface ),
+                 static_cast< void const* >( audio_data_ptr ),
+                 pcm_frame_offset,
+                 pcm_frame_count );
+
   surface_fill( surface, 0.0, 0.0, 0.0, 1.0 );
 
   cairo_t* cr = cairo_create( surface );
@@ -132,13 +160,13 @@ void draw_samples_on_surface( cairo_surface_t* surface, AudioData* audio_data_pt
   double surface_w = cairo_image_surface_get_width( surface );
   double surface_h = cairo_image_surface_get_height( surface );
 
-  double middle_y = surface_h / 2;
-  double frame_duration = pcm_frame_offset_to - pcm_frame_offset_from + 1;
+  double const middle_y = surface_h / 2;
+  double const frame_duration = pcm_frame_count;
   double prev_x = 0;
   double prev_y = middle_y;
   double x = 0;
   double y = middle_y;
-  // std::cout << fmt::format( "draw_samples_on_surface - {} frames for {} pixels", frame_duration, surface_w ) << std::endl;
+  // logger->debug( "draw_samples_on_surface - {} frames for {} pixels", frame_duration, surface_w );
 
   cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
   // default is 2
@@ -151,11 +179,14 @@ void draw_samples_on_surface( cairo_surface_t* surface, AudioData* audio_data_pt
     double red = std::pow( 0.5, static_cast< double >( c ) );
     cairo_set_source_rgb( cr, red, 0.0, 0.0 );
 
-    for( size_t i = 0; i < frame_duration; i++ ) {
+    for( size_t i = 0; i < pcm_frame_count; i++ ) {
       x = std::round( static_cast< float >( surface_w ) * ( static_cast< float >( i ) / static_cast< float >( frame_duration - 1 ) ) );
 
       // range: -1.0 to 1.0
-      float sample = audio_data_ptr->sample_data[( ( pcm_frame_offset_from + i ) * audio_data_ptr->channels ) + c];
+      float sample = 0.0;
+      if( i < audio_data_ptr->total_pcm_frame_count ) {
+        sample = audio_data_ptr->sample_data[( ( pcm_frame_offset + i ) * audio_data_ptr->channels ) + c];
+      }
 
       y = std::round( static_cast< double >( middle_y ) + ( static_cast< double >( middle_y ) * sample ) );
 
@@ -174,22 +205,36 @@ void draw_samples_on_surface( cairo_surface_t* surface, AudioData* audio_data_pt
 
   cairo_restore( cr );
   cairo_destroy( cr );
+
+  logger->trace( "exit" );
 }
 
-void draw_freqs_on_surface( cairo_surface_t* surface, AudioData* audio_data_ptr, size_t pcm_frame_offset_from, size_t pcm_frame_offset_to ) {
+void draw_freqs_on_surface( cairo_surface_t* surface, AudioData const* audio_data_ptr, size_t const pcm_frame_offset, size_t const pcm_frame_count ) {
+  spdlogger logger = LoggerFactory::get_logger( "draw_freqs_on_surface" );
+  logger->trace( "enter: surface: {}, audio_data_ptr: {}, pcm_frame_offset: {}, pcm_frame_count: {}",
+                 static_cast< void* >( surface ),
+                 static_cast< void const* >( audio_data_ptr ),
+                 pcm_frame_offset,
+                 pcm_frame_count );
+
   surface_fill( surface, 0.0, 0.0, 0.0, 1.0 );
   // todo: fixme: add content
+
+  logger->trace( "exit" );
 }
 
 void thread_run( std::vector< ThreadInputData > const& inputs ) {
+  spdlogger logger = LoggerFactory::get_logger( "draw_freqs_on_surface" );
+  logger->trace( "enter: inputs: {} items", inputs.size() );
+
   int32_t render_frame_width = 1920;
   int32_t render_frame_height = 1080;
 
   std::vector< ThreadInputData > inputs_copy = inputs;
   cairo_surface_t* dynamic_waves_surface = surface_create_size( 917, 387 );
   cairo_surface_t* dynamic_freqs_surface = surface_create_size( 917, 387 );
-  std::cout << fmt::format( "dynamic_waves_surface: {}", static_cast< void* >( dynamic_waves_surface ) ) << std::endl;
-  std::cout << fmt::format( "dynamic_freqs_surface: {}", static_cast< void* >( dynamic_freqs_surface ) ) << std::endl;
+  logger->debug( "dynamic_waves_surface: {}", static_cast< void* >( dynamic_waves_surface ) );
+  logger->debug( "dynamic_freqs_surface: {}", static_cast< void* >( dynamic_freqs_surface ) );
 
   cairo_rectangle_t project_common_circle_dest_rect;
   cairo_rectangle_t dynamic_waves_dest_rect;
@@ -211,10 +256,13 @@ void thread_run( std::vector< ThreadInputData > const& inputs ) {
     // range: 0.0 - 1.0
     float min_sample_value = 0.0;
     float max_sample_value = 0.0;
-    for( size_t i = input_data.pcm_frame_offset_from; i <= input_data.pcm_frame_offset_to; i++ ) {
+    for( size_t i = input_data.pcm_frame_offset; i <= ( input_data.pcm_frame_offset + input_data.pcm_frame_count ); i++ ) {
       for( size_t c = 0; c <= input_data.audio_data_ptr->channels; c++ ) {
         size_t sample_index = ( i * input_data.audio_data_ptr->channels ) + c;
-        float sample = input_data.audio_data_ptr->processed_sample_data[sample_index];
+        float sample = 0.0;
+        if( i < input_data.audio_data_ptr->total_pcm_frame_count ) {
+          sample = input_data.audio_data_ptr->processed_sample_data[sample_index];
+        }
         min_sample_value = std::min( min_sample_value, sample );
         max_sample_value = std::max( max_sample_value, sample );
       }
@@ -225,15 +273,15 @@ void thread_run( std::vector< ThreadInputData > const& inputs ) {
     double colour_displace_intensity_scale = 0.2;
 
     project_common_circle_dest_rect.width = static_cast< double >( cairo_image_surface_get_width( input_data.project_common_circle_surface ) )
-                                            * ( 0.5 + ( sound_intensity * circle_intensity_scale ) );
+                                            * ( ( 1.0 - circle_intensity_scale ) + ( std::pow( sound_intensity, 2.0 ) * circle_intensity_scale ) );
     project_common_circle_dest_rect.height = project_common_circle_dest_rect.width;
     project_common_circle_dest_rect.x
         = 114.5 + ( ( 1804.5 - 114.5 ) * ( static_cast< double >( input_data.i ) / static_cast< double >( input_data.amount_output_frames ) ) )
           - ( project_common_circle_dest_rect.width / 2.0 );
     project_common_circle_dest_rect.y = 964.5 - ( project_common_circle_dest_rect.height / 2.0 );
 
-    draw_samples_on_surface( dynamic_waves_surface, input_data.audio_data_ptr, input_data.pcm_frame_offset_from, input_data.pcm_frame_offset_to );
-    draw_freqs_on_surface( dynamic_freqs_surface, input_data.audio_data_ptr, input_data.pcm_frame_offset_from, input_data.pcm_frame_offset_to );
+    draw_samples_on_surface( dynamic_waves_surface, input_data.audio_data_ptr, input_data.pcm_frame_offset, input_data.pcm_frame_count );
+    draw_freqs_on_surface( dynamic_freqs_surface, input_data.audio_data_ptr, input_data.pcm_frame_offset, input_data.pcm_frame_count );
 
     // make copy of bg, put waves and freqs and circle on copy, put copy on canvas, shakily
     cairo_surface_t* copied_bg_surface = surface_copy( input_data.project_common_bg_surface );
@@ -256,42 +304,45 @@ void thread_run( std::vector< ThreadInputData > const& inputs ) {
                   project_common_circle_dest_rect.width,
                   project_common_circle_dest_rect.height );
 
-    // todo: fixme: use surface_shake_and_blit
     surface_shake_and_blit( copied_bg_surface, frame_surface_to_save, ( colour_displace_intensity_scale * sound_intensity ), true );
-    // surface_blit( copied_bg_surface, frame_surface_to_save, 0, 0, render_frame_width, render_frame_height );
     cairo_surface_destroy( copied_bg_surface );
 
-    // // put art on canvas, shakily
-    // todo: fixme: use surface_shake_and_blit
+    // put art on canvas, shakily
     surface_shake_and_blit( input_data.project_art_surface, frame_surface_to_save, ( colour_displace_intensity_scale * sound_intensity ) );
-    // surface_blit( input_data.project_art_surface, frame_surface_to_save, 0, 0, render_frame_width, render_frame_height );
 
-    // // put title on canvas, shakily
-    // todo: fixme: use surface_shake_and_blit
+    // put title on canvas, shakily
     surface_shake_and_blit( input_data.static_text_surface, frame_surface_to_save, ( colour_displace_intensity_scale * sound_intensity ) );
-    // surface_blit( input_data.static_text_surface, frame_surface_to_save, 0, 0, render_frame_width, render_frame_height );
 
-    // // save canvas
+    // save canvas
     save_surface( frame_surface_to_save, input_data.project_temp_pictureset_picture_path );
     cairo_surface_destroy( frame_surface_to_save );
   }
 
   cairo_surface_destroy( dynamic_freqs_surface );
   cairo_surface_destroy( dynamic_waves_surface );
+
+  logger->trace( "exit" );
 }
 
 int main( int argc, char** argv ) {
+  double const fps = 60.0;
+  int32_t const width = 1920;
+  int32_t const height = 1080;
+  size_t const wanted_threads = 16;
+
+  LoggerFactory::init( "main.log", true );
+
   std::vector< std::string > args = parse_args( argc, argv );
   for( size_t i = 0; i < args.size(); i++ ) {
-    std::cout << fmt::format( "arg {}: {}", i, args[i] ) << std::endl;
+    spdlog::debug( "arg {}: {:?}", i, args[i] );
   }
   if( args.size() <= 1 ) {
-    std::cerr << fmt::format( "usage: program 'folder/path/of/video/project'" ) << std::endl;
-    args.push_back( "C:\\Users\\SFG\\Documents\\Video Project\\_SFGrenade - Decimation\\" );
-    // return 1;
+    spdlog::error( "usage: program 'folder/path/of/video/project'" );
+    LoggerFactory::deinit();
+    return 1;
   }
   std::filesystem::path project_folder( args[1] );
-  std::cout << fmt::format( "project_folder: {}", project_folder.string() ) << std::endl;
+  spdlog::debug( "project_folder: {:?}", project_folder.string() );
 
   std::filesystem::path project_common_bg_path( project_folder / ".." / "bg.old.png" );
   std::filesystem::path project_common_circle_path( project_folder / ".." / "circle.png" );
@@ -299,36 +350,36 @@ int main( int argc, char** argv ) {
   std::filesystem::path project_audio_path( project_folder / "audio.wav" );
   std::filesystem::path project_title_path( project_folder / "title.txt" );
   if( !std::filesystem::is_regular_file( project_common_bg_path ) ) {
-    std::cerr << fmt::format( "error: file '{}' doesn't exist!", project_common_bg_path.string() ) << std::endl;
+    spdlog::error( "error: file {:?} doesn't exist!", project_common_bg_path.string() );
+    LoggerFactory::deinit();
     return 1;
   }
   if( !std::filesystem::is_regular_file( project_common_circle_path ) ) {
-    std::cerr << fmt::format( "error: file '{}' doesn't exist!", project_common_circle_path.string() ) << std::endl;
+    spdlog::error( "error: file {:?} doesn't exist!", project_common_circle_path.string() );
+    LoggerFactory::deinit();
     return 1;
   }
   if( !std::filesystem::is_regular_file( project_art_path ) ) {
-    std::cerr << fmt::format( "error: file '{}' doesn't exist!", project_art_path.string() ) << std::endl;
+    spdlog::error( "error: file {:?} doesn't exist!", project_art_path.string() );
+    LoggerFactory::deinit();
     return 1;
   }
   if( !std::filesystem::is_regular_file( project_audio_path ) ) {
-    std::cerr << fmt::format( "error: file '{}' doesn't exist!", project_audio_path.string() ) << std::endl;
+    spdlog::error( "error: file {:?} doesn't exist!", project_audio_path.string() );
+    LoggerFactory::deinit();
     return 1;
   }
   if( !std::filesystem::is_regular_file( project_title_path ) ) {
-    std::cerr << fmt::format( "error: file '{}' doesn't exist!", project_title_path.string() ) << std::endl;
+    spdlog::error( "error: file {:?} doesn't exist!", project_title_path.string() );
+    LoggerFactory::deinit();
     return 1;
   }
 
   std::filesystem::path project_temp_pictureset_folder( project_folder / "__pictures" );
-  if( !std::filesystem::is_directory( project_temp_pictureset_folder ) ) {
-    std::filesystem::create_directory( project_temp_pictureset_folder );
+  if( std::filesystem::is_directory( project_temp_pictureset_folder ) ) {
+    std::filesystem::remove_all( project_temp_pictureset_folder );
   }
-
-  double fps = 60.0;
-  int32_t width = 1920;
-  int32_t height = 1080;
-
-  size_t wanted_threads = 16;
+  std::filesystem::create_directory( project_temp_pictureset_folder );
 
   AudioData project_audio_data;
   project_audio_data.sample_data = drwav_open_file_and_read_pcm_frames_f32( project_audio_path.string().c_str(),
@@ -336,28 +387,28 @@ int main( int argc, char** argv ) {
                                                                             &project_audio_data.sample_rate,
                                                                             &project_audio_data.total_pcm_frame_count,
                                                                             nullptr );
-  std::cout << fmt::format( "project_audio_data.channels: {}", project_audio_data.channels ) << std::endl;
-  std::cout << fmt::format( "project_audio_data.sample_rate: {}", project_audio_data.sample_rate ) << std::endl;
-  std::cout << fmt::format( "project_audio_data.total_pcm_frame_count: {}", project_audio_data.total_pcm_frame_count ) << std::endl;
+  spdlog::debug( "project_audio_data.channels: {}", project_audio_data.channels );
+  spdlog::debug( "project_audio_data.sample_rate: {}", project_audio_data.sample_rate );
+  spdlog::debug( "project_audio_data.total_pcm_frame_count: {}", project_audio_data.total_pcm_frame_count );
   project_audio_data.duration = static_cast< double >( project_audio_data.total_pcm_frame_count ) / static_cast< double >( project_audio_data.sample_rate );
-  std::cout << fmt::format( "project_audio_data.duration: {}", project_audio_data.duration ) << std::endl;
+  spdlog::debug( "project_audio_data.duration: {}", project_audio_data.duration );
 
-  std::cout << fmt::format( "create_lowpass_for_audio_data..." ) << std::endl;
+  spdlog::debug( "create_lowpass_for_audio_data..." );
   create_lowpass_for_audio_data( &project_audio_data, project_folder, 100.0, 20.0 );
 
   size_t amount_output_frames = static_cast< size_t >( std::ceil( project_audio_data.duration * fps ) );
-  std::cout << fmt::format( "amount_output_frames: {}", amount_output_frames ) << std::endl;
-  double pcmFramesPerOutputFrame = static_cast< double >( project_audio_data.total_pcm_frame_count ) / static_cast< double >( amount_output_frames );
-  std::cout << fmt::format( "pcmFramesPerOutputFrame: {}", pcmFramesPerOutputFrame ) << std::endl;
+  spdlog::debug( "amount_output_frames: {}", amount_output_frames );
+  double pcm_frames_per_output_frame = static_cast< double >( project_audio_data.total_pcm_frame_count ) / static_cast< double >( amount_output_frames );
+  spdlog::debug( "pcm_frames_per_output_frame: {}", pcm_frames_per_output_frame );
 
   cairo_surface_t* project_common_bg_surface = surface_load_file( project_common_bg_path );
   cairo_surface_t* project_common_circle_surface = surface_load_file( project_common_circle_path );
   cairo_surface_t* project_art_surface = surface_load_file_into_overlay( project_art_path, width, height, 24, 24, 917, 812 );
-  std::cout << fmt::format( "project_common_bg_surface: {}", static_cast< void* >( project_common_bg_surface ) ) << std::endl;
-  std::cout << fmt::format( "project_common_circle_surface: {}", static_cast< void* >( project_common_circle_surface ) ) << std::endl;
-  std::cout << fmt::format( "project_art_surface: {}", static_cast< void* >( project_art_surface ) ) << std::endl;
+  spdlog::debug( "project_common_bg_surface: {}", static_cast< void* >( project_common_bg_surface ) );
+  spdlog::debug( "project_common_circle_surface: {}", static_cast< void* >( project_common_circle_surface ) );
+  spdlog::debug( "project_art_surface: {}", static_cast< void* >( project_art_surface ) );
   cairo_surface_t* static_text_surface = surface_render_text_into_overlay( project_title_path, width, height, 979, 24, 917, 387 );
-  std::cout << fmt::format( "static_text_surface: {}", static_cast< void* >( static_text_surface ) ) << std::endl;
+  spdlog::debug( "static_text_surface: {}", static_cast< void* >( static_text_surface ) );
 
   std::vector< std::vector< ThreadInputData > > thread_input_lists;
   thread_input_lists.reserve( wanted_threads );
@@ -371,21 +422,20 @@ int main( int argc, char** argv ) {
     ThreadInputData input_data;
     input_data.i = i;
     input_data.amount_output_frames = amount_output_frames;
-    input_data.project_temp_pictureset_picture_path = project_temp_pictureset_folder / fmt::format( "{:0>6}.png", i );
-    input_data.pcm_frame_offset_from = std::max< size_t >( 0, static_cast< size_t >( std::floor( pcm_frame_offset ) ) );
-    input_data.pcm_frame_offset_to
-        = std::min< size_t >( project_audio_data.total_pcm_frame_count - 1, static_cast< size_t >( std::ceil( pcm_frame_offset + pcmFramesPerOutputFrame ) ) );
+    input_data.project_temp_pictureset_picture_path = project_temp_pictureset_folder / fmt::format( "{}.png", i );
+    input_data.pcm_frame_offset = std::max< size_t >( 0, static_cast< size_t >( std::floor( pcm_frame_offset ) ) );
+    input_data.pcm_frame_count = static_cast< size_t >( std::ceil( pcm_frames_per_output_frame ) );
     input_data.audio_data_ptr = &project_audio_data;
     input_data.project_common_bg_surface = project_common_bg_surface;
     input_data.project_common_circle_surface = project_common_circle_surface;
     input_data.project_art_surface = project_art_surface;
     input_data.static_text_surface = static_text_surface;
-    // std::cout << fmt::format( "output frame from sample {} to {}", input_data.pcm_frame_offset_from, input_data.pcm_frame_offset_to ) << std::endl;
+    // spdlog::debug( "output frame from sample {} to {}", input_data.pcm_frame_offset, input_data.pcm_frame_offset + (input_data.pcm_frame_count - 1) );
 
     size_t thread_index = i % wanted_threads;
     thread_input_lists[thread_index].push_back( input_data );
 
-    pcm_frame_offset += pcmFramesPerOutputFrame;
+    pcm_frame_offset += pcm_frames_per_output_frame;
   }
 
   std::vector< std::thread > thread_list;
@@ -402,5 +452,6 @@ int main( int argc, char** argv ) {
   cairo_surface_destroy( project_common_circle_surface );
   cairo_surface_destroy( project_common_bg_surface );
 
+  LoggerFactory::deinit();
   return 0;
 }
