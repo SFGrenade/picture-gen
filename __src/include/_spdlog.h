@@ -4,7 +4,9 @@
 #include <memory>
 #include <string>
 
+#ifndef FMT_USE_LOCALE
 #define FMT_USE_LOCALE 1
+#endif
 
 // Including FMT headers
 #include <fmt/base.h>

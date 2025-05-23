@@ -248,7 +248,7 @@ void surface_shake_and_blit( cairo_surface_t* source, cairo_surface_t* dest, dou
 
   std::random_device random_device;
   std::mt19937_64 gen( random_device() );
-  std::uniform_int_distribution<> dist( static_cast< int >( -150.0 * shake_intensity ), static_cast< int >( 150.0 * shake_intensity ) );
+  std::uniform_int_distribution<> dist( static_cast< int >( -128.0 * shake_intensity ), static_cast< int >( 128.0 * shake_intensity ) );
 
   int32_t const x_offset_red = dist( gen );
   int32_t const y_offset_red = dist( gen );

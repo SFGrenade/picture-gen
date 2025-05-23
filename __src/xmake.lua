@@ -23,9 +23,10 @@ add_requireconfs( "*", { configs = { shared = get_config( "kind" ) == "shared" }
 add_requires( "cairo" )
 add_requires( "dr_wav" )
 add_requires( "vcpkg::iir1", { alias = "iir1" } )
-add_requires( "vcpkg::kissfft", { alias = "kissfft" } )
+add_requires( "vcpkg::fftw3", { alias = "fftw3" } )
 add_requires( "spdlog" )
 
+add_requireconfs( "fftw3", { configs = { features = { "threads" } } } )
 add_requireconfs( "spdlog", { configs = { header_only = true, std_format = false, fmt_external = false, fmt_external_ho = true, noexcept = false } } )
 if is_plat( "windows" ) then
   add_cxxflags( "/utf-8", { public = true } )
@@ -41,7 +42,7 @@ target( "Video-Frame-Generator" )
   add_packages( "cairo", { public = true } )
   add_packages( "dr_wav", { public = true } )
   add_packages( "iir1", { public = true } )
-  add_packages( "kissfft", { public = true } )
+  add_packages( "fftw3", { public = true } )
   add_packages( "spdlog", { public = true } )
 
   add_includedirs( "include", { public = true } )

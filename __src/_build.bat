@@ -26,6 +26,9 @@ EXIT /B %ERRORLEVEL%
 
 cd "%SCRIPT_DIR%"
 
+REM RMDIR /S /Q .xmake
+REM RMDIR /S /Q build
+
 RMDIR /S /Q %logFolder%
 
 MKDIR %logFolder%
@@ -34,7 +37,7 @@ CALL :doCommand "00_made_build_logs" "echo we did it" && cd>NUL || Goto :END
 
 CALL :doCommand "01_xmake_set_theme" "xmake global --theme=plain" && cd>NUL || Goto :END
 
-CALL :doCommand "02_xmake_configure" "xmake config --import=.vscode\xmake.windows.static.release.MT.conf -vD -y" && cd>NUL || Goto :END
+CALL :doCommand "02_xmake_configure" "xmake config --import=.vscode\xmake.windows.shared.release.MD.conf -vD -y" && cd>NUL || Goto :END
 
 CALL :doCommand "03_xmake_build" "xmake build -a -vD" && cd>NUL || Goto :END
 

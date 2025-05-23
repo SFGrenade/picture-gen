@@ -30,7 +30,7 @@ Log-Message("Called xmake program")
 Log-Message("Rendering final video...")
 
 ffmpeg -hide_banner -y -hwaccel cuda -hwaccel_output_format cuda `
-    -r $fps -i __pictures\%06d.png -max_size "$bitrate / 8 / $fps" -r $fps -i audio.wav -shortest `
+    -r $fps -i __pictures\%d.png -max_size "$bitrate / 8 / $fps" -r $fps -i audio.wav -shortest `
     -filter_complex "yadif, format=pix_fmts=yuv420p : color_spaces=bt709 [VIDEO_OUT]" `
     -c:a aac -ac 2 -ar 48000 `
         -aac_coder fast -b:a 512K `
