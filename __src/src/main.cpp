@@ -107,26 +107,29 @@ void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
   audio_data_ptr->processed_sample_data = new float[sample_amount];
   memset( audio_data_ptr->processed_sample_data, 0, sample_amount * sizeof( audio_data_ptr->processed_sample_data[0] ) );
 
-  const int lowpass_order = 8;
-  const int highpass_order = 8;
+  int const filter_order = 16;
 
-  Iir::Butterworth::LowPass< lowpass_order > lowpass;
-  lowpass.setup( audio_data_ptr->sample_rate, lowpass_cutoff );
-  Iir::Butterworth::HighPass< highpass_order > highpass;
-  highpass.setup( audio_data_ptr->sample_rate, highpass_cutoff );
+  Iir::Butterworth::LowPass< filter_order > lowpass;
+  Iir::Butterworth::HighPass< filter_order > highpass;
 
   // fill buf1 into audio_data_ptr
-  for( size_t i = 0; i < sample_amount; i++ ) {
-    audio_data_ptr->sample_min = std::clamp( std::min( audio_data_ptr->sample_min, audio_data_ptr->sample_data[i] ), -1.0f, 1.0f );
-    audio_data_ptr->sample_max = std::clamp( std::max( audio_data_ptr->sample_max, audio_data_ptr->sample_data[i] ), -1.0f, 1.0f );
+  for( size_t c = 0; c < audio_data_ptr->channels; c++ ) {
+    lowpass.setup( audio_data_ptr->sample_rate, lowpass_cutoff );
+    highpass.setup( audio_data_ptr->sample_rate, highpass_cutoff );
+    for( size_t i = 0; i < audio_data_ptr->total_pcm_frame_count; i++ ) {
+      size_t sample_index = ( i * audio_data_ptr->channels ) + c;
 
-    float lowpassed_sample = lowpass.filter( audio_data_ptr->sample_data[i] );
-    float highpassed_sample = highpass.filter( lowpassed_sample );
-    audio_data_ptr->processed_sample_data[i] = highpassed_sample;
-    audio_data_ptr->processed_sample_min
-        = std::clamp( std::min( audio_data_ptr->processed_sample_min, audio_data_ptr->processed_sample_data[i] ), -1.0f, 1.0f );
-    audio_data_ptr->processed_sample_max
-        = std::clamp( std::max( audio_data_ptr->processed_sample_max, audio_data_ptr->processed_sample_data[i] ), -1.0f, 1.0f );
+      audio_data_ptr->sample_min = std::clamp( std::min( audio_data_ptr->sample_min, audio_data_ptr->sample_data[sample_index] ), -1.0f, 1.0f );
+      audio_data_ptr->sample_max = std::clamp( std::max( audio_data_ptr->sample_max, audio_data_ptr->sample_data[sample_index] ), -1.0f, 1.0f );
+
+      float lowpassed_sample = lowpass.filter( audio_data_ptr->sample_data[sample_index] );
+      float highpassed_sample = highpass.filter( lowpassed_sample );
+      audio_data_ptr->processed_sample_data[sample_index] = highpassed_sample;
+      audio_data_ptr->processed_sample_min
+          = std::clamp( std::min( audio_data_ptr->processed_sample_min, audio_data_ptr->processed_sample_data[sample_index] ), -1.0f, 1.0f );
+      audio_data_ptr->processed_sample_max
+          = std::clamp( std::max( audio_data_ptr->processed_sample_max, audio_data_ptr->processed_sample_data[sample_index] ), -1.0f, 1.0f );
+    }
   }
 
   drwav dw_obj;
@@ -264,6 +267,10 @@ void draw_freqs_on_surface( cairo_surface_t* surface,
   double const min_mag_db = -120.0;
   double const max_mag_db = 0.0;
 
+  int const filter_order = 16;
+  Iir::Butterworth::LowPass< filter_order > lowpass;
+  Iir::Butterworth::HighPass< filter_order > highpass;
+
   cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_BUTT );
   // cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
   // // default is 2
@@ -272,6 +279,9 @@ void draw_freqs_on_surface( cairo_surface_t* surface,
   // can be refactored to loop from `(channels - 1)` to `0`
   // int c = 0;
   for( int c = ( channels - 1 ); c >= 0; c-- ) {
+    lowpass.setup( audio_data_ptr->sample_rate, max_freq );
+    highpass.setup( audio_data_ptr->sample_rate, min_freq );
+
     double red = std::pow( 0.5, static_cast< double >( c + 1 ) );
     cairo_set_source_rgb( cr, red, 0.0, 0.0 );
 
@@ -280,7 +290,10 @@ void draw_freqs_on_surface( cairo_surface_t* surface,
     for( size_t i = 0; i < input_data.fft_input_size; i++ ) {
       float w = 0.5f * ( 1 - std::cos( 2 * std::numbers::pi_v< float > * i / ( input_data.fft_input_size - 1 ) ) );  // Hann window
       if( ( i < pcm_frame_count ) && ( ( pcm_frame_offset + i ) < total_frames ) ) {
-        input_data.fft_input[i] = samples[( ( pcm_frame_offset + i ) * channels ) + c] * w;
+        float sample = samples[( ( pcm_frame_offset + i ) * channels ) + c];
+        sample = lowpass.filter( sample );   // get high frequencies away
+        sample = highpass.filter( sample );  // get low frequencies away
+        input_data.fft_input[i] = sample * w;
       }
     }
 
@@ -382,10 +395,11 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
                                      + ( std::abs( max_sound_sample_value ) / std::abs( input_data.audio_data_ptr->sample_max ) ) )
                                    / 2.0f;
     double const circle_intensity_scale = 0.5;
-    double const colour_displace_intensity_scale = 0.2;
+    double const colour_displace_intensity_scale = 0.15;
 
-    project_common_circle_dest_rect.width = static_cast< double >( cairo_image_surface_get_width( input_data.project_common_circle_surface ) )
-                                            * ( ( 1.0 - circle_intensity_scale ) + ( sound_intensity * circle_intensity_scale ) );
+    project_common_circle_dest_rect.width
+        = static_cast< double >( cairo_image_surface_get_width( input_data.project_common_circle_surface ) )
+          * ( ( 1.0 - circle_intensity_scale ) + ( ( ( bass_intensity + sound_intensity ) / 2.0 ) * circle_intensity_scale ) );
     project_common_circle_dest_rect.height = project_common_circle_dest_rect.width;
     project_common_circle_dest_rect.x
         = 114.5 + ( ( 1804.5 - 114.5 ) * ( static_cast< double >( input_data.i ) / static_cast< double >( input_data.amount_output_frames ) ) )
