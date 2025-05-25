@@ -17,6 +17,7 @@
 #include <thread>
 #include <vector>
 
+#include "fontManager.h"
 #include "loggerFactory.h"
 #include "surface.h"
 #include "utils.h"
@@ -26,6 +27,9 @@
 #define VIDEO_HEIGHT 1080
 #define THREAD_COUNT 16
 #define FILTER_ORDER 16
+
+#define SCALE_WIDTH_FROM_FULLHD( x ) ( double( VIDEO_WIDTH ) * ( double( x ) / 1920.0 ) )
+#define SCALE_HEIGHT_FROM_FULLHD( x ) ( double( VIDEO_HEIGHT ) * ( double( x ) / 1080.0 ) )
 
 std::vector< std::string > parse_args( int const argc, char const* const* const argv ) {
   spdlogger logger = LoggerFactory::get_logger( "parse_args" );
@@ -345,12 +349,9 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
   spdlogger logger = LoggerFactory::get_logger( "thread_run" );
   logger->trace( "enter: inputs: {} items", inputs.size() );
 
-  int32_t render_frame_width = VIDEO_WIDTH;
-  int32_t render_frame_height = VIDEO_HEIGHT;
-
   std::vector< ThreadInputData > inputs_copy = inputs;
-  cairo_surface_t* dynamic_waves_surface = surface_create_size( 917, 387 );
-  cairo_surface_t* dynamic_freqs_surface = surface_create_size( 917, 387 );
+  cairo_surface_t* dynamic_waves_surface = surface_create_size( SCALE_WIDTH_FROM_FULLHD( 917 ), SCALE_HEIGHT_FROM_FULLHD( 387 ) );
+  cairo_surface_t* dynamic_freqs_surface = surface_create_size( SCALE_WIDTH_FROM_FULLHD( 917 ), SCALE_HEIGHT_FROM_FULLHD( 387 ) );
   logger->debug( "dynamic_waves_surface: {}", static_cast< void* >( dynamic_waves_surface ) );
   logger->debug( "dynamic_freqs_surface: {}", static_cast< void* >( dynamic_freqs_surface ) );
 
@@ -358,18 +359,18 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
   cairo_rectangle_t dynamic_waves_dest_rect;
   cairo_rectangle_t dynamic_freqs_dest_rect;
 
-  dynamic_waves_dest_rect.x = 979;
-  dynamic_waves_dest_rect.y = 449;
+  dynamic_waves_dest_rect.x = SCALE_WIDTH_FROM_FULLHD( 979 );
+  dynamic_waves_dest_rect.y = SCALE_HEIGHT_FROM_FULLHD( 449 );
   dynamic_waves_dest_rect.width = cairo_image_surface_get_width( dynamic_waves_surface );
   dynamic_waves_dest_rect.height = cairo_image_surface_get_height( dynamic_waves_surface );
-  dynamic_freqs_dest_rect.x = 979;
-  dynamic_freqs_dest_rect.y = 24;
+  dynamic_freqs_dest_rect.x = SCALE_WIDTH_FROM_FULLHD( 979 );
+  dynamic_freqs_dest_rect.y = SCALE_HEIGHT_FROM_FULLHD( 24 );
   dynamic_freqs_dest_rect.width = cairo_image_surface_get_width( dynamic_freqs_surface );
   dynamic_freqs_dest_rect.height = cairo_image_surface_get_height( dynamic_freqs_surface );
 
   for( ThreadInputData input_data : inputs_copy ) {
     logger->trace( "computing input {}", input_data.i );
-    cairo_surface_t* frame_surface_to_save = surface_create_size( render_frame_width, render_frame_height );
+    cairo_surface_t* frame_surface_to_save = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
     surface_fill( frame_surface_to_save, 0.0, 0.0, 0.0, 1.0 );
 
     double const epilepsy_warning_visible_seconds = 3.0;
@@ -419,11 +420,13 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
     project_common_circle_dest_rect.width
         = static_cast< double >( cairo_image_surface_get_width( input_data.project_common_circle_surface ) )
           * ( ( 1.0 - circle_intensity_scale ) + ( ( ( bass_intensity + sound_intensity ) / 2.0 ) * circle_intensity_scale ) );
+    project_common_circle_dest_rect.width = project_common_circle_dest_rect.width * ( double( VIDEO_WIDTH ) / 1920.0 );
     project_common_circle_dest_rect.height = project_common_circle_dest_rect.width;
-    project_common_circle_dest_rect.x
-        = 114.5 + ( ( 1804.5 - 114.5 ) * ( static_cast< double >( input_data.i ) / static_cast< double >( input_data.amount_output_frames ) ) )
-          - ( project_common_circle_dest_rect.width / 2.0 );
-    project_common_circle_dest_rect.y = 964.5 - ( project_common_circle_dest_rect.height / 2.0 );
+    project_common_circle_dest_rect.x = SCALE_WIDTH_FROM_FULLHD( 114.5 )
+                                        + ( ( SCALE_WIDTH_FROM_FULLHD( 1804.5 ) - SCALE_WIDTH_FROM_FULLHD( 114.5 ) )
+                                            * ( static_cast< double >( input_data.i ) / static_cast< double >( input_data.amount_output_frames ) ) )
+                                        - ( project_common_circle_dest_rect.width / 2.0 );
+    project_common_circle_dest_rect.y = SCALE_HEIGHT_FROM_FULLHD( 964.5 ) - ( project_common_circle_dest_rect.height / 2.0 );
 
     try {
       draw_samples_on_surface( dynamic_waves_surface, input_data.audio_data_ptr, input_data.pcm_frame_offset, input_data.pcm_frame_count );
@@ -480,11 +483,14 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
   logger->trace( "exit" );
 }
 
-cairo_surface_t* create_epilepsy_warning( FT_Library ft_library,
-                                          std::filesystem::path const& font_filepath,
+cairo_surface_t* create_epilepsy_warning( cairo_font_face_t* header_font_face,
+                                          cairo_font_face_t* content_font_face,
                                           std::filesystem::path const& epilepsy_warning_path ) {
   spdlogger logger = LoggerFactory::get_logger( "create_epilepsy_warning" );
-  logger->trace( "enter: font_filepath: {:?}, epilepsy_warning_path: {:?}", font_filepath.string(), epilepsy_warning_path.string() );
+  logger->trace( "enter: header_font_face: {}, content_font_face: {}, epilepsy_warning_path: {:?}",
+                 static_cast< void* >( header_font_face ),
+                 static_cast< void* >( content_font_face ),
+                 epilepsy_warning_path.string() );
 
   const size_t width = VIDEO_WIDTH;
   const size_t height = VIDEO_HEIGHT;
@@ -495,7 +501,7 @@ cairo_surface_t* create_epilepsy_warning( FT_Library ft_library,
   surface_fill( surface, 0.0, 0.0, 0.0, 1.0 );
 
   cairo_surface_t* text_surface
-      = surface_render_text_advanced_into_overlay( ft_library, font_filepath, epilepsy_warning_path, width, height, 0, 0, width, height );
+      = surface_render_text_advanced_into_overlay( header_font_face, content_font_face, epilepsy_warning_path, width, height, 0, 0, width, height );
   surface_blit( text_surface, surface, 0, 0, width, height );
 
   std::string tmp_str = epilepsy_warning_path.string();
@@ -525,11 +531,8 @@ int main( int argc, char** argv ) {
   std::filesystem::path project_folder( args[1] );
   spdlog::debug( "project_folder: {:?}", project_folder.string() );
 
-  std::filesystem::path project_common_font_barber_chop_regular_path( project_folder / ".." / "__fonts" / "barber_chop" / "BarberChop.otf" );
-  std::filesystem::path project_common_font_bestime_regular_path( project_folder / ".." / "__fonts" / "bestime" / "Bestime.otf" );
-  std::filesystem::path project_common_font_roboto_regular_path( project_folder / ".." / "__fonts" / "Roboto" / "Roboto-Regular.ttf" );
-  std::filesystem::path project_common_font_notosans_mono_regular_path( project_folder / ".." / "__fonts" / "NotoSansMono-Regular.ttf" );
-  std::filesystem::path project_common_font_notoserif_regular_path( project_folder / ".." / "__fonts" / "NotoSerif-Regular.ttf" );
+  FontManager::init( project_folder / ".." / "__fonts" );
+
   std::filesystem::path project_common_epilepsy_warning_path( project_folder / ".." / "epileptic_warning.txt" );
   std::filesystem::path project_common_bg_path( project_folder / ".." / "bg.old.png" );
   std::filesystem::path project_common_circle_path( project_folder / ".." / "circle.png" );
@@ -537,12 +540,7 @@ int main( int argc, char** argv ) {
   std::filesystem::path project_audio_path( project_folder / "audio.wav" );
   std::filesystem::path project_title_path( project_folder / "title.txt" );
 
-  for( auto const& file : std::vector< std::filesystem::path >( { project_common_font_barber_chop_regular_path,
-                                                                  project_common_font_bestime_regular_path,
-                                                                  project_common_font_roboto_regular_path,
-                                                                  project_common_font_notosans_mono_regular_path,
-                                                                  project_common_font_notoserif_regular_path,
-                                                                  project_common_epilepsy_warning_path,
+  for( auto const& file : std::vector< std::filesystem::path >( { project_common_epilepsy_warning_path,
                                                                   project_common_bg_path,
                                                                   project_common_circle_path,
                                                                   project_art_path,
@@ -581,25 +579,30 @@ int main( int argc, char** argv ) {
   double pcm_frames_per_output_frame = static_cast< double >( project_audio_data.total_pcm_frame_count ) / static_cast< double >( amount_output_frames );
   spdlog::debug( "pcm_frames_per_output_frame: {}", pcm_frames_per_output_frame );
 
-  FT_Library ft_library = nullptr;
-  FT_Error ft_ret;
-  if( ( ft_ret = FT_Init_FreeType( &ft_library ) ) != 0 ) {
-    spdlog::error( "FT_Init_FreeType returned {}", ft_ret );
-    LoggerFactory::deinit();
-    return 1;
-  }
-
-  cairo_surface_t* project_common_epilepsy_warning_surface
-      = create_epilepsy_warning( ft_library, project_common_font_notoserif_regular_path, project_common_epilepsy_warning_path );
+  cairo_surface_t* project_common_epilepsy_warning_surface = create_epilepsy_warning( FontManager::get_font_face( "BarberChop.otf" ),
+                                                                                      FontManager::get_font_face( "arial_narrow_7.ttf" ),
+                                                                                      project_common_epilepsy_warning_path );
   cairo_surface_t* project_common_bg_surface = surface_load_file( project_common_bg_path );
   cairo_surface_t* project_common_circle_surface = surface_load_file( project_common_circle_path );
-  cairo_surface_t* project_art_surface = surface_load_file_into_overlay( project_art_path, width, height, 24, 24, 917, 812 );
+  cairo_surface_t* project_art_surface = surface_load_file_into_overlay( project_art_path,
+                                                                         width,
+                                                                         height,
+                                                                         SCALE_WIDTH_FROM_FULLHD( 24 ),
+                                                                         SCALE_HEIGHT_FROM_FULLHD( 24 ),
+                                                                         SCALE_WIDTH_FROM_FULLHD( 917 ),
+                                                                         SCALE_HEIGHT_FROM_FULLHD( 812 ) );
   spdlog::debug( "project_common_epilepsy_warning_surface: {}", static_cast< void* >( project_common_epilepsy_warning_surface ) );
   spdlog::debug( "project_common_bg_surface: {}", static_cast< void* >( project_common_bg_surface ) );
   spdlog::debug( "project_common_circle_surface: {}", static_cast< void* >( project_common_circle_surface ) );
   spdlog::debug( "project_art_surface: {}", static_cast< void* >( project_art_surface ) );
-  cairo_surface_t* static_text_surface
-      = surface_render_text_into_overlay( ft_library, project_common_font_notoserif_regular_path, project_title_path, width, height, 979, 24, 917, 387 );
+  cairo_surface_t* static_text_surface = surface_render_text_into_overlay( FontManager::get_font_face( "Roboto-Regular.ttf" ),
+                                                                           project_title_path,
+                                                                           width,
+                                                                           height,
+                                                                           SCALE_WIDTH_FROM_FULLHD( 979 ),
+                                                                           SCALE_HEIGHT_FROM_FULLHD( 24 ),
+                                                                           SCALE_WIDTH_FROM_FULLHD( 917 ),
+                                                                           SCALE_HEIGHT_FROM_FULLHD( 387 ) );
   spdlog::debug( "static_text_surface: {}", static_cast< void* >( static_text_surface ) );
 
   std::vector< std::vector< ThreadInputData > > thread_input_lists;
@@ -679,11 +682,7 @@ int main( int argc, char** argv ) {
   cairo_surface_destroy( project_common_bg_surface );
   cairo_surface_destroy( project_common_epilepsy_warning_surface );
 
-  if( ( ft_ret = FT_Done_FreeType( ft_library ) ) != 0 ) {
-    spdlog::error( "FT_Done_FreeType returned {}", ft_ret );
-    LoggerFactory::deinit();
-    return 1;
-  }
+  FontManager::deinit();
 
   LoggerFactory::deinit();
   return 0;

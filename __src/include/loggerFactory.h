@@ -1,5 +1,4 @@
-#ifndef LOGGER_LOGGERFACTORY_H_
-#define LOGGER_LOGGERFACTORY_H_
+#pragma once
 
 #include <map>
 #include <memory>
@@ -22,5 +21,3 @@ class LoggerFactory {
   static std::map< std::string, spdlogger > loggers_;
   static std::mutex loggersMutex_;
 };
-
-#endif /* LOGGER_LOGGERFACTORY_H_ */

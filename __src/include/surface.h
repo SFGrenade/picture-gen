@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <filesystem>
 
-
 void surface_blit( cairo_surface_t* src,
                    cairo_surface_t* dest,
                    double const dest_x,
@@ -34,8 +33,7 @@ cairo_surface_t* surface_load_file_into_overlay( std::filesystem::path const& fi
                                                  int32_t const width,
                                                  int32_t const height );
 
-cairo_surface_t* surface_render_text_into_overlay( FT_Library ft_library,
-                                                   std::filesystem::path const& font_filepath,
+cairo_surface_t* surface_render_text_into_overlay( cairo_font_face_t* font_face,
                                                    std::filesystem::path const& filepath,
                                                    int32_t const overlay_width,
                                                    int32_t const overlay_height,
@@ -44,8 +42,8 @@ cairo_surface_t* surface_render_text_into_overlay( FT_Library ft_library,
                                                    int32_t const width,
                                                    int32_t const height );
 
-cairo_surface_t* surface_render_text_advanced_into_overlay( FT_Library ft_library,
-                                                            std::filesystem::path const& font_filepath,
+cairo_surface_t* surface_render_text_advanced_into_overlay( cairo_font_face_t* header_font_face,
+                                                            cairo_font_face_t* content_font_face,
                                                             std::filesystem::path const& filepath,
                                                             int32_t const overlay_width,
                                                             int32_t const overlay_height,

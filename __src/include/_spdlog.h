@@ -1,5 +1,4 @@
-#ifndef GENERATOR_SPDLOG_H_
-#define GENERATOR_SPDLOG_H_
+#pragma once
 
 #include <memory>
 #include <string>
@@ -73,5 +72,3 @@ struct fmt::formatter< std::weak_ptr< T > > {
     return fmt::format_to( ctx.out(), "{:p}", fmt::ptr( p ) );
   }
 };
-
-#endif /* GENERATOR_SPDLOG_H_ */
