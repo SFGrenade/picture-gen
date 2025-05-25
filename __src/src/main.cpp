@@ -1,4 +1,3 @@
-#include <memory>
 #define DR_WAV_IMPLEMENTATION
 #include <Iir.h>
 #include <cairo.h>
@@ -12,6 +11,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
+#include <memory>
 #include <numbers>
 #include <string>
 #include <thread>
@@ -20,6 +20,12 @@
 #include "loggerFactory.h"
 #include "surface.h"
 #include "utils.h"
+
+#define FPS 60.0
+#define VIDEO_WIDTH 1920
+#define VIDEO_HEIGHT 1080
+#define THREAD_COUNT 16
+#define FILTER_ORDER 16
 
 std::vector< std::string > parse_args( int const argc, char const* const* const argv ) {
   spdlogger logger = LoggerFactory::get_logger( "parse_args" );
@@ -38,6 +44,7 @@ std::vector< std::string > parse_args( int const argc, char const* const* const 
       tmp_multi_arg += " " + tmp_arg;
       if( ( tmp_arg.size() > 0 ) && ( tmp_arg.back() == multi_arg ) ) {
         multi_arg = '\0';
+        // skip first "/' and go until before last of them
         args.push_back( tmp_multi_arg.substr( 1, tmp_multi_arg.size() - 2 ) );
         tmp_multi_arg = "";
       }
@@ -77,6 +84,7 @@ struct ThreadInputData {
   size_t pcm_frame_offset;
   size_t pcm_frame_count;
   AudioData* audio_data_ptr = nullptr;
+  cairo_surface_t* project_common_epilepsy_warning_surface = nullptr;
   cairo_surface_t* project_common_bg_surface = nullptr;
   cairo_surface_t* project_common_circle_surface = nullptr;
   cairo_surface_t* project_art_surface = nullptr;
@@ -107,10 +115,8 @@ void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
   audio_data_ptr->processed_sample_data = new float[sample_amount];
   memset( audio_data_ptr->processed_sample_data, 0, sample_amount * sizeof( audio_data_ptr->processed_sample_data[0] ) );
 
-  int const filter_order = 16;
-
-  Iir::Butterworth::LowPass< filter_order > lowpass;
-  Iir::Butterworth::HighPass< filter_order > highpass;
+  Iir::Butterworth::LowPass< FILTER_ORDER > lowpass;
+  Iir::Butterworth::HighPass< FILTER_ORDER > highpass;
 
   // fill buf1 into audio_data_ptr
   for( size_t c = 0; c < audio_data_ptr->channels; c++ ) {
@@ -119,16 +125,18 @@ void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
     for( size_t i = 0; i < audio_data_ptr->total_pcm_frame_count; i++ ) {
       size_t sample_index = ( i * audio_data_ptr->channels ) + c;
 
-      audio_data_ptr->sample_min = std::clamp( std::min( audio_data_ptr->sample_min, audio_data_ptr->sample_data[sample_index] ), -1.0f, 1.0f );
-      audio_data_ptr->sample_max = std::clamp( std::max( audio_data_ptr->sample_max, audio_data_ptr->sample_data[sample_index] ), -1.0f, 1.0f );
+      audio_data_ptr->sample_min = std::min( audio_data_ptr->sample_min, audio_data_ptr->sample_data[sample_index] );
+      audio_data_ptr->sample_max = std::max( audio_data_ptr->sample_max, audio_data_ptr->sample_data[sample_index] );
+      audio_data_ptr->sample_min = std::clamp( audio_data_ptr->sample_min, -1.0f, 1.0f );
+      audio_data_ptr->sample_max = std::clamp( audio_data_ptr->sample_max, -1.0f, 1.0f );
 
       float lowpassed_sample = lowpass.filter( audio_data_ptr->sample_data[sample_index] );
       float highpassed_sample = highpass.filter( lowpassed_sample );
       audio_data_ptr->processed_sample_data[sample_index] = highpassed_sample;
-      audio_data_ptr->processed_sample_min
-          = std::clamp( std::min( audio_data_ptr->processed_sample_min, audio_data_ptr->processed_sample_data[sample_index] ), -1.0f, 1.0f );
-      audio_data_ptr->processed_sample_max
-          = std::clamp( std::max( audio_data_ptr->processed_sample_max, audio_data_ptr->processed_sample_data[sample_index] ), -1.0f, 1.0f );
+      audio_data_ptr->processed_sample_min = std::min( audio_data_ptr->processed_sample_min, audio_data_ptr->processed_sample_data[sample_index] );
+      audio_data_ptr->processed_sample_max = std::max( audio_data_ptr->processed_sample_max, audio_data_ptr->processed_sample_data[sample_index] );
+      audio_data_ptr->processed_sample_min = std::clamp( audio_data_ptr->processed_sample_min, -1.0f, 1.0f );
+      audio_data_ptr->processed_sample_max = std::clamp( audio_data_ptr->processed_sample_max, -1.0f, 1.0f );
     }
   }
 
@@ -145,7 +153,7 @@ void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
       std::filesystem::remove( tmp_audio_path );
     }
     if( drwav_init_file_write( &dw_obj, tmp_audio_path.string().c_str(), &dw_fmt, nullptr ) ) {
-      drwav_uint64 framesWritten = drwav_write_pcm_frames( &dw_obj, audio_data_ptr->total_pcm_frame_count, audio_data_ptr->processed_sample_data );
+      size_t framesWritten = drwav_write_pcm_frames( &dw_obj, audio_data_ptr->total_pcm_frame_count, audio_data_ptr->processed_sample_data );
       logger->debug( "framesWritten: {}", framesWritten );
       drwav_uninit( &dw_obj );
     }
@@ -182,20 +190,20 @@ void draw_samples_on_surface( cairo_surface_t* surface, AudioData const* audio_d
   double const surface_w = cairo_image_surface_get_width( surface );
   double const surface_h = cairo_image_surface_get_height( surface );
 
-  double const middle_y = surface_h / 2;
+  double const middle_y = surface_h / 2.0;
   double const frame_duration = static_cast< double >( pcm_frame_count );
-  double prev_x = 0;
+  double prev_x = 0.0;
   double prev_y = middle_y;
-  double x = 0;
+  double x = 0.0;
   double y = middle_y;
   // logger->debug( "draw_samples_on_surface - {} frames for {} pixels", frame_duration, surface_w );
 
   cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
-  // default is 2
-  cairo_set_line_width( cr, 3 );
+  // default is 2.0
+  cairo_set_line_width( cr, 3.0 );
 
   for( int c = audio_data_ptr->channels - 1; c >= 0; c-- ) {
-    prev_x = 0;
+    prev_x = 0.0;
     prev_y = middle_y;
 
     double red = std::pow( 0.5, static_cast< double >( c ) );
@@ -267,19 +275,18 @@ void draw_freqs_on_surface( cairo_surface_t* surface,
   double const min_mag_db = -120.0;
   double const max_mag_db = 0.0;
 
-  int const filter_order = 16;
-  Iir::Butterworth::LowPass< filter_order > lowpass;
-  Iir::Butterworth::HighPass< filter_order > highpass;
+  Iir::Butterworth::LowPass< FILTER_ORDER > lowpass;
+  Iir::Butterworth::HighPass< FILTER_ORDER > highpass;
 
   cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_BUTT );
   // cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
-  // // default is 2
-  // cairo_set_line_width( cr, 3 );
+  // // default is 2.0
+  // cairo_set_line_width( cr, 3.0 );
 
   // can be refactored to loop from `(channels - 1)` to `0`
   // int c = 0;
   for( int c = ( channels - 1 ); c >= 0; c-- ) {
-    lowpass.setup( audio_data_ptr->sample_rate, max_freq );
+    lowpass.setup( audio_data_ptr->sample_rate, max_freq - 1.0 );
     highpass.setup( audio_data_ptr->sample_rate, min_freq );
 
     double red = std::pow( 0.5, static_cast< double >( c + 1 ) );
@@ -338,8 +345,8 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
   spdlogger logger = LoggerFactory::get_logger( "thread_run" );
   logger->trace( "enter: inputs: {} items", inputs.size() );
 
-  int32_t render_frame_width = 1920;
-  int32_t render_frame_height = 1080;
+  int32_t render_frame_width = VIDEO_WIDTH;
+  int32_t render_frame_height = VIDEO_HEIGHT;
 
   std::vector< ThreadInputData > inputs_copy = inputs;
   cairo_surface_t* dynamic_waves_surface = surface_create_size( 917, 387 );
@@ -364,6 +371,18 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
     logger->trace( "computing input {}", input_data.i );
     cairo_surface_t* frame_surface_to_save = surface_create_size( render_frame_width, render_frame_height );
     surface_fill( frame_surface_to_save, 0.0, 0.0, 0.0, 1.0 );
+
+    double const epilepsy_warning_visible_seconds = 3.0;
+    double const epilepsy_warning_fadeout_seconds = 2.0;
+    double epilepsy_warning_alpha = 0.0;
+    if( input_data.i < size_t( epilepsy_warning_visible_seconds * FPS ) ) {
+      epilepsy_warning_alpha = 1.0;
+    } else if( input_data.i >= size_t( ( epilepsy_warning_visible_seconds + epilepsy_warning_fadeout_seconds ) * FPS ) ) {
+      epilepsy_warning_alpha = 0.0;
+    } else {
+      epilepsy_warning_alpha = 1.0 - ( ( ( double( input_data.i ) / FPS ) - epilepsy_warning_visible_seconds ) / epilepsy_warning_fadeout_seconds );
+      epilepsy_warning_alpha = std::clamp( epilepsy_warning_alpha, 0.0, 1.0 );
+    }
 
     // range: 0.0 - 1.0
     float min_bass_sample_value = 0.0;
@@ -447,6 +466,9 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
     // put title on canvas, shakily
     surface_shake_and_blit( input_data.static_text_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ) );
 
+    // put warning on top, with alpha
+    surface_blit( input_data.project_common_epilepsy_warning_surface, frame_surface_to_save, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, epilepsy_warning_alpha );
+
     // save canvas
     save_surface( frame_surface_to_save, input_data.project_temp_pictureset_picture_path );
     cairo_surface_destroy( frame_surface_to_save );
@@ -458,11 +480,35 @@ void thread_run( std::vector< ThreadInputData > inputs ) {
   logger->trace( "exit" );
 }
 
+cairo_surface_t* create_epilepsy_warning( FT_Library ft_library,
+                                          std::filesystem::path const& font_filepath,
+                                          std::filesystem::path const& epilepsy_warning_path ) {
+  spdlogger logger = LoggerFactory::get_logger( "create_epilepsy_warning" );
+  logger->trace( "enter: font_filepath: {:?}, epilepsy_warning_path: {:?}", font_filepath.string(), epilepsy_warning_path.string() );
+
+  const size_t width = VIDEO_WIDTH;
+  const size_t height = VIDEO_HEIGHT;
+
+  cairo_surface_t* surface = surface_create_size( width, height );
+
+  // drawing the epilepsy warning
+  surface_fill( surface, 0.0, 0.0, 0.0, 1.0 );
+
+  cairo_surface_t* text_surface
+      = surface_render_text_advanced_into_overlay( ft_library, font_filepath, epilepsy_warning_path, width, height, 0, 0, width, height );
+  surface_blit( text_surface, surface, 0, 0, width, height );
+
+  std::string tmp_str = epilepsy_warning_path.string();
+  std::filesystem::path epilepsy_warning_picture_path( replace( tmp_str, ".txt", ".png" ) );
+  save_surface( surface, epilepsy_warning_picture_path );
+
+  logger->trace( "exit" );
+  return surface;
+}
+
 int main( int argc, char** argv ) {
-  double const fps = 60.0;
-  int32_t const width = 1920;
-  int32_t const height = 1080;
-  size_t const wanted_threads = 16;
+  int32_t const width = VIDEO_WIDTH;
+  int32_t const height = VIDEO_HEIGHT;
 
   LoggerFactory::init( "main.log", false );
 
@@ -479,35 +525,34 @@ int main( int argc, char** argv ) {
   std::filesystem::path project_folder( args[1] );
   spdlog::debug( "project_folder: {:?}", project_folder.string() );
 
+  std::filesystem::path project_common_font_barber_chop_regular_path( project_folder / ".." / "__fonts" / "barber_chop" / "BarberChop.otf" );
+  std::filesystem::path project_common_font_bestime_regular_path( project_folder / ".." / "__fonts" / "bestime" / "Bestime.otf" );
+  std::filesystem::path project_common_font_roboto_regular_path( project_folder / ".." / "__fonts" / "Roboto" / "Roboto-Regular.ttf" );
+  std::filesystem::path project_common_font_notosans_mono_regular_path( project_folder / ".." / "__fonts" / "NotoSansMono-Regular.ttf" );
+  std::filesystem::path project_common_font_notoserif_regular_path( project_folder / ".." / "__fonts" / "NotoSerif-Regular.ttf" );
+  std::filesystem::path project_common_epilepsy_warning_path( project_folder / ".." / "epileptic_warning.txt" );
   std::filesystem::path project_common_bg_path( project_folder / ".." / "bg.old.png" );
   std::filesystem::path project_common_circle_path( project_folder / ".." / "circle.png" );
   std::filesystem::path project_art_path( project_folder / "art.png" );
   std::filesystem::path project_audio_path( project_folder / "audio.wav" );
   std::filesystem::path project_title_path( project_folder / "title.txt" );
-  if( !std::filesystem::is_regular_file( project_common_bg_path ) ) {
-    spdlog::error( "error: file {:?} doesn't exist!", project_common_bg_path.string() );
-    LoggerFactory::deinit();
-    return 1;
-  }
-  if( !std::filesystem::is_regular_file( project_common_circle_path ) ) {
-    spdlog::error( "error: file {:?} doesn't exist!", project_common_circle_path.string() );
-    LoggerFactory::deinit();
-    return 1;
-  }
-  if( !std::filesystem::is_regular_file( project_art_path ) ) {
-    spdlog::error( "error: file {:?} doesn't exist!", project_art_path.string() );
-    LoggerFactory::deinit();
-    return 1;
-  }
-  if( !std::filesystem::is_regular_file( project_audio_path ) ) {
-    spdlog::error( "error: file {:?} doesn't exist!", project_audio_path.string() );
-    LoggerFactory::deinit();
-    return 1;
-  }
-  if( !std::filesystem::is_regular_file( project_title_path ) ) {
-    spdlog::error( "error: file {:?} doesn't exist!", project_title_path.string() );
-    LoggerFactory::deinit();
-    return 1;
+
+  for( auto const& file : std::vector< std::filesystem::path >( { project_common_font_barber_chop_regular_path,
+                                                                  project_common_font_bestime_regular_path,
+                                                                  project_common_font_roboto_regular_path,
+                                                                  project_common_font_notosans_mono_regular_path,
+                                                                  project_common_font_notoserif_regular_path,
+                                                                  project_common_epilepsy_warning_path,
+                                                                  project_common_bg_path,
+                                                                  project_common_circle_path,
+                                                                  project_art_path,
+                                                                  project_audio_path,
+                                                                  project_title_path } ) ) {
+    if( !std::filesystem::is_regular_file( file ) ) {
+      spdlog::error( "error: file {:?} doesn't exist!", file.string() );
+      LoggerFactory::deinit();
+      return 1;
+    }
   }
 
   std::filesystem::path project_temp_pictureset_folder( project_folder / "__pictures" );
@@ -531,25 +576,37 @@ int main( int argc, char** argv ) {
   spdlog::debug( "create_lowpass_for_audio_data..." );
   create_lowpass_for_audio_data( &project_audio_data, project_folder, 80.0, 20.0 );
 
-  size_t amount_output_frames = static_cast< size_t >( std::ceil( project_audio_data.duration * fps ) );
+  size_t amount_output_frames = static_cast< size_t >( std::ceil( project_audio_data.duration * FPS ) );
   spdlog::debug( "amount_output_frames: {}", amount_output_frames );
   double pcm_frames_per_output_frame = static_cast< double >( project_audio_data.total_pcm_frame_count ) / static_cast< double >( amount_output_frames );
   spdlog::debug( "pcm_frames_per_output_frame: {}", pcm_frames_per_output_frame );
 
+  FT_Library ft_library = nullptr;
+  FT_Error ft_ret;
+  if( ( ft_ret = FT_Init_FreeType( &ft_library ) ) != 0 ) {
+    spdlog::error( "FT_Init_FreeType returned {}", ft_ret );
+    LoggerFactory::deinit();
+    return 1;
+  }
+
+  cairo_surface_t* project_common_epilepsy_warning_surface
+      = create_epilepsy_warning( ft_library, project_common_font_notoserif_regular_path, project_common_epilepsy_warning_path );
   cairo_surface_t* project_common_bg_surface = surface_load_file( project_common_bg_path );
   cairo_surface_t* project_common_circle_surface = surface_load_file( project_common_circle_path );
   cairo_surface_t* project_art_surface = surface_load_file_into_overlay( project_art_path, width, height, 24, 24, 917, 812 );
+  spdlog::debug( "project_common_epilepsy_warning_surface: {}", static_cast< void* >( project_common_epilepsy_warning_surface ) );
   spdlog::debug( "project_common_bg_surface: {}", static_cast< void* >( project_common_bg_surface ) );
   spdlog::debug( "project_common_circle_surface: {}", static_cast< void* >( project_common_circle_surface ) );
   spdlog::debug( "project_art_surface: {}", static_cast< void* >( project_art_surface ) );
-  cairo_surface_t* static_text_surface = surface_render_text_into_overlay( project_title_path, width, height, 979, 24, 917, 387 );
+  cairo_surface_t* static_text_surface
+      = surface_render_text_into_overlay( ft_library, project_common_font_notoserif_regular_path, project_title_path, width, height, 979, 24, 917, 387 );
   spdlog::debug( "static_text_surface: {}", static_cast< void* >( static_text_surface ) );
 
   std::vector< std::vector< ThreadInputData > > thread_input_lists;
-  thread_input_lists.reserve( wanted_threads );
-  for( int i = 0; i < wanted_threads; i++ ) {
+  thread_input_lists.reserve( THREAD_COUNT );
+  for( int i = 0; i < THREAD_COUNT; i++ ) {
     std::vector< ThreadInputData > vec;
-    vec.reserve( ( amount_output_frames / wanted_threads ) + 1 );
+    vec.reserve( ( amount_output_frames / THREAD_COUNT ) + 1 );
     thread_input_lists.push_back( vec );
   }
   double pcm_frame_offset = 0.0;
@@ -561,6 +618,7 @@ int main( int argc, char** argv ) {
     input_data.pcm_frame_offset = std::max< size_t >( 0, static_cast< size_t >( std::floor( pcm_frame_offset ) ) );
     input_data.pcm_frame_count = static_cast< size_t >( std::ceil( pcm_frames_per_output_frame * 4.0 ) );
     input_data.audio_data_ptr = &project_audio_data;
+    input_data.project_common_epilepsy_warning_surface = project_common_epilepsy_warning_surface;
     input_data.project_common_bg_surface = project_common_bg_surface;
     input_data.project_common_circle_surface = project_common_circle_surface;
     input_data.project_art_surface = project_art_surface;
@@ -570,7 +628,7 @@ int main( int argc, char** argv ) {
                    input_data.pcm_frame_offset,
                    input_data.pcm_frame_offset + ( input_data.pcm_frame_count - 1 ) );
 
-    size_t thread_index = i % wanted_threads;
+    size_t thread_index = i % THREAD_COUNT;
     thread_input_lists[thread_index].push_back( input_data );
 
     pcm_frame_offset += pcm_frames_per_output_frame;
@@ -619,6 +677,13 @@ int main( int argc, char** argv ) {
   cairo_surface_destroy( project_art_surface );
   cairo_surface_destroy( project_common_circle_surface );
   cairo_surface_destroy( project_common_bg_surface );
+  cairo_surface_destroy( project_common_epilepsy_warning_surface );
+
+  if( ( ft_ret = FT_Done_FreeType( ft_library ) ) != 0 ) {
+    spdlog::error( "FT_Done_FreeType returned {}", ft_ret );
+    LoggerFactory::deinit();
+    return 1;
+  }
 
   LoggerFactory::deinit();
   return 0;

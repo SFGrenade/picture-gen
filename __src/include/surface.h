@@ -1,10 +1,18 @@
 #pragma once
 
+#include <cairo-ft.h>
 #include <cairo.h>
 #include <cstdint>
 #include <filesystem>
 
-void surface_blit( cairo_surface_t* src, cairo_surface_t* dest, double const dest_x, double const dest_y, double const dest_width, double const dest_height );
+
+void surface_blit( cairo_surface_t* src,
+                   cairo_surface_t* dest,
+                   double const dest_x,
+                   double const dest_y,
+                   double const dest_width,
+                   double const dest_height,
+                   double const alpha = 1.0 );
 
 cairo_surface_t* surface_load_file( std::filesystem::path const& filepath );
 
@@ -26,13 +34,25 @@ cairo_surface_t* surface_load_file_into_overlay( std::filesystem::path const& fi
                                                  int32_t const width,
                                                  int32_t const height );
 
-cairo_surface_t* surface_render_text_into_overlay( std::filesystem::path const& filepath,
+cairo_surface_t* surface_render_text_into_overlay( FT_Library ft_library,
+                                                   std::filesystem::path const& font_filepath,
+                                                   std::filesystem::path const& filepath,
                                                    int32_t const overlay_width,
                                                    int32_t const overlay_height,
                                                    int32_t const x,
                                                    int32_t const y,
                                                    int32_t const width,
                                                    int32_t const height );
+
+cairo_surface_t* surface_render_text_advanced_into_overlay( FT_Library ft_library,
+                                                            std::filesystem::path const& font_filepath,
+                                                            std::filesystem::path const& filepath,
+                                                            int32_t const overlay_width,
+                                                            int32_t const overlay_height,
+                                                            int32_t const x,
+                                                            int32_t const y,
+                                                            int32_t const width,
+                                                            int32_t const height );
 
 void surface_fill( cairo_surface_t* s, double const r, double const g, double const b, double const a );
 

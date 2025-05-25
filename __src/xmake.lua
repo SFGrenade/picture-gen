@@ -28,6 +28,7 @@ add_requires( "spdlog" )
 
 add_requireconfs( "fftw3", { configs = { features = { "threads" } } } )
 add_requireconfs( "spdlog", { configs = { header_only = true, std_format = false, fmt_external = false, fmt_external_ho = true, noexcept = false } } )
+
 if is_plat( "windows" ) then
   add_cxxflags( "/utf-8", { public = true } )
 end

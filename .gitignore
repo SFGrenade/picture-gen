@@ -1,6 +1,8 @@
 **
 !__src/
+!__fonts/
 !.gitignore
+!epileptic_warning.txt
 !*_filter.txt
 !*.png
 !*.ps1

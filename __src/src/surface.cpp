@@ -1,21 +1,22 @@
 #include "surface.h"
 
-#include <cairo-ft.h>
-#include <cairo.h>
 #include <fmt/base.h>
 #include <fmt/chrono.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
-#include <ft2build.h>
 #include <random>
-
-#include FT_FREETYPE_H
 
 #include "loggerFactory.h"
 #include "utils.h"
 
-void surface_blit( cairo_surface_t* src, cairo_surface_t* dest, double const dest_x, double const dest_y, double const dest_width, double const dest_height ) {
+void surface_blit( cairo_surface_t* src,
+                   cairo_surface_t* dest,
+                   double const dest_x,
+                   double const dest_y,
+                   double const dest_width,
+                   double const dest_height,
+                   double const alpha ) {
   double const src_width = cairo_image_surface_get_width( src );
   double const src_height = cairo_image_surface_get_height( src );
 
@@ -25,7 +26,7 @@ void surface_blit( cairo_surface_t* src, cairo_surface_t* dest, double const des
   cairo_translate( cr, dest_x, dest_y );
   cairo_scale( cr, dest_width / src_width, dest_height / src_height );
   cairo_set_source_surface( cr, src, 0, 0 );
-  cairo_paint( cr );
+  cairo_paint_with_alpha( cr, std::clamp( alpha, 0.0, 1.0 ) );
 
   cairo_restore( cr );
   cairo_destroy( cr );
@@ -74,67 +75,307 @@ cairo_surface_t* surface_load_file_into_overlay( std::filesystem::path const& fi
   return overlay;
 }
 
-cairo_surface_t* surface_render_text_into_overlay( std::filesystem::path const& filepath,
+void int_surface_load_font( FT_Library ft_library, std::filesystem::path const& font_path, std::function< void( cairo_font_face_t* ) > callback ) {
+  spdlogger logger = LoggerFactory::get_logger( "int_surface_load_font" );
+  logger->trace( "enter: font_path: {:?}", font_path.string() );
+
+  cairo_font_face_t* cairo_ft_face = nullptr;
+  FT_Face ft_face = nullptr;
+  FT_Error ft_ret;
+  if( ( ft_ret = FT_New_Face( ft_library, font_path.string().c_str(), 0, &ft_face ) ) == 0 ) {
+    cairo_ft_face = cairo_ft_font_face_create_for_ft_face( ft_face, 0 );
+
+    callback( cairo_ft_face );
+    // callback( nullptr );
+
+    cairo_font_face_destroy( cairo_ft_face );
+    if( ( ft_ret = FT_Done_Face( ft_face ) ) != 0 ) {
+      logger->error( "FT_New_Face returned {}", ft_ret );
+    }
+  } else {
+    logger->error( "FT_New_Face returned {}", ft_ret );
+  }
+
+  logger->trace( "exit" );
+}
+
+cairo_surface_t* surface_render_text_into_overlay( FT_Library ft_library,
+                                                   std::filesystem::path const& font_filepath,
+                                                   std::filesystem::path const& filepath,
                                                    int32_t const overlay_width,
                                                    int32_t const overlay_height,
                                                    int32_t const x,
                                                    int32_t const y,
                                                    int32_t const width,
                                                    int32_t const height ) {
-  std::filesystem::path const font_path = std::filesystem::path( "C:" ) / "Windows" / "Fonts" / "NotoSans-Regular.ttf";
-  int const font_size = 60;
-  double const line_spacing = 1.1;
+  spdlogger logger = LoggerFactory::get_logger( "surface_render_text_into_overlay" );
+  logger->trace( "enter: ft_library: {}, font_filepath: {:?}, filepath: {:?}, overlay_width: {}, overlay_height: {}, x: {}, y: {}, width: {}, height: {}",
+                 static_cast< void* >( ft_library ),
+                 font_filepath.string(),
+                 filepath.string(),
+                 overlay_width,
+                 overlay_height,
+                 x,
+                 y,
+                 width,
+                 height );
+
+  int font_size = 60;
+  double line_spacing = 1.1;
+
+  logger->trace( "font_size: {}", font_size );
+  logger->trace( "line_spacing: {}", line_spacing );
 
   std::ifstream file_stream( filepath );
   std::string file_content( ( std::istreambuf_iterator< char >( file_stream ) ), ( std::istreambuf_iterator< char >() ) );
   file_content = replace( file_content, "\r\n", "\n" );
   std::vector< std::string > content_lines = split_multiline( file_content );
 
-  cairo_surface_t* surface = surface_create_size( width, height );
-  {
-    cairo_t* cr = cairo_create( surface );
-    cairo_save( cr );
-
-    cairo_font_options_t* cairo_ft_options = cairo_font_options_create();
-    cairo_font_options_set_antialias( cairo_ft_options, cairo_antialias_t::CAIRO_ANTIALIAS_GRAY );
-
-    cairo_font_face_t* cairo_ft_face = nullptr;
-    FT_Library ft_library;
-    if( 0 == FT_Init_FreeType( &ft_library ) ) {
-      FT_Face ft_face;
-      if( 0 == FT_New_Face( ft_library, font_path.string().c_str(), 0, &ft_face ) ) {
-        cairo_ft_face = cairo_ft_font_face_create_for_ft_face( ft_face, 0 );
-        FT_Done_Face( ft_face );
-      }
-      FT_Done_FreeType( ft_library );
-    }
-    cairo_set_font_face( cr, cairo_ft_face );
-    cairo_set_font_size( cr, font_size );
-    cairo_set_source_rgb( cr, 1, 1, 1 );
-
-    double const line_height = font_size * line_spacing;
-    double const total_text_height = content_lines.size() * line_height;
-
-    // starting height
-    double y = ( ( height - total_text_height ) / 2.0 ) + ( font_size / line_spacing );
-    for( std::string const& content_line : content_lines ) {
-      cairo_text_extents_t extents;
-      cairo_text_extents( cr, content_line.c_str(), &extents );
-      double x = ( width - extents.width ) / 2.0 - extents.x_bearing;
-
-      cairo_move_to( cr, x, y );
-      cairo_show_text( cr, content_line.c_str() );
-      y += line_height;
-    }
-
-    cairo_restore( cr );
-    cairo_destroy( cr );
-    cairo_font_face_destroy( cairo_ft_face );
-    cairo_font_options_destroy( cairo_ft_options );
+  if( content_lines.size() == 0 ) {
+    logger->trace( "exit: no content" );
+    return surface_create_size( overlay_width, overlay_height );
   }
+
+  double total_text_height = 0.0;  // content_lines.size() * line_height;
+
+  logger->trace( "total_text_height: {}", total_text_height );
+
+  cairo_surface_t* surface = surface_create_size( width, height );
+  cairo_t* cr = cairo_create( surface );
+  cairo_save( cr );
+
+  logger->trace( "surface: {}", static_cast< void* >( surface ) );
+  logger->trace( "cr: {}", static_cast< void* >( cr ) );
+
+  cairo_font_options_t* cairo_ft_options = cairo_font_options_create();
+  cairo_get_font_options( cr, cairo_ft_options );
+  cairo_font_options_set_antialias( cairo_ft_options, cairo_antialias_t::CAIRO_ANTIALIAS_GRAY );
+  cairo_set_font_options( cr, cairo_ft_options );
+
+  logger->trace( "cairo_ft_options: {}", static_cast< void* >( cairo_ft_options ) );
+
+  int_surface_load_font( ft_library,
+                         font_filepath,
+                         [width, height, logger, font_size, line_spacing, content_lines, &total_text_height, cr]( cairo_font_face_t* cairo_ft_face ) {
+                           cairo_set_font_face( cr, cairo_ft_face );
+                           cairo_set_font_size( cr, font_size );
+                           cairo_set_source_rgba( cr, 1.0, 0.0, 0.0, 1.0 );
+
+                           for( int i = 0; i < content_lines.size(); i++ ) {
+                             std::string content_line = content_lines[i];
+                             cairo_text_extents_t extents;
+                             cairo_text_extents( cr, content_line.c_str(), &extents );
+
+                             double line_height = extents.height * line_spacing;
+                             total_text_height += line_height;
+                           }
+
+                           logger->trace( "total_text_height: {}", total_text_height );
+
+                           logger->trace( "cairo_ft_face: {}", static_cast< void* >( cairo_ft_face ) );
+
+                           cairo_set_font_face( cr, cairo_ft_face );
+                           cairo_set_font_size( cr, font_size );
+                           cairo_set_source_rgba( cr, 1.0, 1.0, 1.0, 1.0 );
+
+                           for( size_t i = 0; i < content_lines.size(); i++ ) {
+                             std::string content_line = content_lines[i];
+                             cairo_text_extents_t extents;
+                             cairo_text_extents( cr, content_line.c_str(), &extents );
+
+                             double line_height = extents.height * line_spacing;
+                             double text_x = ( width - extents.width ) / 2.0 - extents.x_bearing;
+                             double text_y = ( ( height - total_text_height ) / 2.0 ) - extents.y_bearing + ( line_height * i );
+
+                             cairo_move_to( cr, text_x, text_y );
+                             cairo_show_text( cr, content_line.c_str() );
+                           }
+                         } );
+
+  cairo_font_options_destroy( cairo_ft_options );
+
+  cairo_restore( cr );
+  cairo_destroy( cr );
 
   cairo_surface_t* overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
   cairo_surface_destroy( surface );
+  return overlay;
+}
+
+cairo_surface_t* surface_render_text_advanced_into_overlay( FT_Library ft_library,
+                                                            std::filesystem::path const& font_filepath,
+                                                            std::filesystem::path const& filepath,
+                                                            int32_t const overlay_width,
+                                                            int32_t const overlay_height,
+                                                            int32_t const x,
+                                                            int32_t const y,
+                                                            int32_t const width,
+                                                            int32_t const height ) {
+  spdlogger logger = LoggerFactory::get_logger( "surface_render_text_advanced_into_overlay" );
+  logger->trace( "enter: ft_library: {}, font_filepath: {:?}, filepath: {:?}, overlay_width: {}, overlay_height: {}, x: {}, y: {}, width: {}, height: {}",
+                 static_cast< void* >( ft_library ),
+                 font_filepath.string(),
+                 filepath.string(),
+                 overlay_width,
+                 overlay_height,
+                 x,
+                 y,
+                 width,
+                 height );
+
+  int regular_font_size = 60;
+  int header_font_size = regular_font_size * 1.8;
+  double line_spacing = 1.1;
+
+  logger->trace( "regular_font_size: {}", regular_font_size );
+  logger->trace( "header_font_size: {}", header_font_size );
+  logger->trace( "line_spacing: {}", line_spacing );
+
+  std::ifstream file_stream( filepath );
+  std::string file_content( ( std::istreambuf_iterator< char >( file_stream ) ), ( std::istreambuf_iterator< char >() ) );
+  file_content = replace( file_content, "\r\n", "\n" );
+  std::vector< std::string > content_lines = split_multiline( file_content );
+
+  if( content_lines.size() == 0 ) {
+    logger->trace( "exit: no content" );
+    return surface_create_size( overlay_width, overlay_height );
+  }
+
+  double header_line_height = 0.0;         // header_font_size * line_spacing;
+  double header_total_text_height = 0.0;   // header_line_height;
+  double regular_line_height = 0.0;        // regular_font_size * line_spacing;
+  double regular_total_text_height = 0.0;  // ( content_lines.size() - 1 ) * regular_line_height;
+  double total_text_height = 0.0;          // header_total_text_height + regular_total_text_height;
+
+  logger->trace( "header_line_height: {}", header_line_height );
+  logger->trace( "header_total_text_height: {}", header_total_text_height );
+  logger->trace( "regular_line_height: {}", regular_line_height );
+  logger->trace( "regular_total_text_height: {}", regular_total_text_height );
+  logger->trace( "total_text_height: {}", total_text_height );
+
+  cairo_surface_t* surface = surface_create_size( width, height );
+  cairo_t* cr = cairo_create( surface );
+  cairo_save( cr );
+
+  logger->trace( "surface: {}", static_cast< void* >( surface ) );
+  logger->trace( "cr: {}", static_cast< void* >( cr ) );
+
+  cairo_font_options_t* cairo_ft_options = cairo_font_options_create();
+  cairo_get_font_options( cr, cairo_ft_options );
+  cairo_font_options_set_antialias( cairo_ft_options, cairo_antialias_t::CAIRO_ANTIALIAS_GRAY );
+  cairo_set_font_options( cr, cairo_ft_options );
+
+  logger->trace( "cairo_ft_options: {}", static_cast< void* >( cairo_ft_options ) );
+
+  int_surface_load_font( ft_library,
+                         font_filepath,
+                         [width,
+                          height,
+                          logger,
+                          regular_font_size,
+                          header_font_size,
+                          line_spacing,
+                          content_lines,
+                          &header_line_height,
+                          &header_total_text_height,
+                          &regular_line_height,
+                          &regular_total_text_height,
+                          &total_text_height,
+                          cr]( cairo_font_face_t* cairo_ft_face ) {
+                           {
+                             // header
+                             cairo_set_font_face( cr, cairo_ft_face );
+                             cairo_set_font_size( cr, header_font_size );
+                             cairo_set_source_rgba( cr, 1.0, 0.0, 0.0, 1.0 );
+
+                             std::string content_line = content_lines[0];
+                             cairo_text_extents_t extents;
+                             cairo_text_extents( cr, content_line.c_str(), &extents );
+
+                             header_line_height = extents.height;
+
+                             header_line_height = header_line_height * line_spacing;
+                             header_total_text_height = header_line_height;
+                             total_text_height += header_total_text_height;
+                           }
+                           {
+                             // content
+                             cairo_set_font_face( cr, cairo_ft_face );
+                             cairo_set_font_size( cr, regular_font_size );
+                             cairo_set_source_rgba( cr, 1.0, 1.0, 1.0, 1.0 );
+
+                             for( int i = 1; i < content_lines.size(); i++ ) {
+                               std::string content_line = content_lines[i];
+                               cairo_text_extents_t extents;
+                               cairo_text_extents( cr, content_line.c_str(), &extents );
+
+                               regular_line_height = extents.height;
+
+                               regular_line_height = regular_line_height * line_spacing;
+                               regular_total_text_height += regular_line_height;
+                             }
+
+                             total_text_height += regular_total_text_height;
+                           }
+
+                           logger->trace( "header_line_height: {}", header_line_height );
+                           logger->trace( "header_total_text_height: {}", header_total_text_height );
+                           logger->trace( "regular_line_height: {}", regular_line_height );
+                           logger->trace( "regular_total_text_height: {}", regular_total_text_height );
+                           logger->trace( "total_text_height: {}", total_text_height );
+
+                           // starting height
+                           double text_x = 0.0;
+                           double text_y = 0.0;
+                           {
+                             // draw header
+                             logger->trace( "cairo_ft_face: {}", static_cast< void* >( cairo_ft_face ) );
+
+                             cairo_set_font_face( cr, cairo_ft_face );
+                             cairo_set_font_size( cr, header_font_size );
+                             cairo_set_source_rgba( cr, 1.0, 0.0, 0.0, 1.0 );
+
+                             std::string content_line = content_lines[0];
+                             cairo_text_extents_t extents;
+                             cairo_text_extents( cr, content_line.c_str(), &extents );
+
+                             text_x = ( width - extents.width ) / 2.0 - extents.x_bearing;
+                             text_y = ( ( height - total_text_height ) / 2.0 ) - extents.y_bearing;
+
+                             cairo_move_to( cr, text_x, text_y );
+                             cairo_show_text( cr, content_line.c_str() );
+                             text_y += header_line_height;
+                           }
+                           {
+                             // draw content
+                             logger->trace( "cairo_ft_face: {}", static_cast< void* >( cairo_ft_face ) );
+
+                             cairo_set_font_face( cr, cairo_ft_face );
+                             cairo_set_font_size( cr, regular_font_size );
+                             cairo_set_source_rgba( cr, 1.0, 1.0, 1.0, 1.0 );
+
+                             for( size_t i = 1; i < content_lines.size(); i++ ) {
+                               std::string content_line = content_lines[i];
+                               cairo_text_extents_t extents;
+                               cairo_text_extents( cr, content_line.c_str(), &extents );
+                               text_x = ( width - extents.width ) / 2.0 - extents.x_bearing;
+
+                               cairo_move_to( cr, text_x, text_y );
+                               cairo_show_text( cr, content_line.c_str() );
+                               text_y += regular_line_height;
+                             }
+                           }
+                         } );
+
+  cairo_font_options_destroy( cairo_ft_options );
+
+  cairo_restore( cr );
+  cairo_destroy( cr );
+
+  cairo_surface_t* overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
+  cairo_surface_destroy( surface );
+
+  logger->trace( "exit: overlay: {}", static_cast< void* >( overlay ) );
   return overlay;
 }
 
