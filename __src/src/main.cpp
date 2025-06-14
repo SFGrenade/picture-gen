@@ -21,6 +21,7 @@
 #include "loggerFactory.h"
 #include "surface.h"
 #include "utils.h"
+#include "window_functions.h"
 
 #define FPS 60.0
 #define VIDEO_WIDTH 1920
@@ -96,6 +97,7 @@ struct ThreadInputData {
   std::shared_ptr< fftwf_plan_s > fft_plan = nullptr;
   size_t fft_input_size;
   std::shared_ptr< float[] > fft_input = nullptr;
+  std::shared_ptr< double[] > fft_window = nullptr;
   size_t fft_output_size;
   std::shared_ptr< fftwf_complex[] > fft_output = nullptr;
 };
@@ -279,63 +281,83 @@ void draw_freqs_on_surface( cairo_surface_t* surface,
   double const min_mag_db = -120.0;
   double const max_mag_db = 0.0;
 
-  Iir::Butterworth::LowPass< FILTER_ORDER > lowpass;
-  Iir::Butterworth::HighPass< FILTER_ORDER > highpass;
-
   cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_BUTT );
   // cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
   // // default is 2.0
   // cairo_set_line_width( cr, 3.0 );
 
-  // can be refactored to loop from `(channels - 1)` to `0`
-  // int c = 0;
+  // per channel
   for( int c = ( channels - 1 ); c >= 0; c-- ) {
-    lowpass.setup( audio_data_ptr->sample_rate, max_freq - 1.0 );
-    highpass.setup( audio_data_ptr->sample_rate, min_freq );
-
     double red = std::pow( 0.5, static_cast< double >( c + 1 ) );
     cairo_set_source_rgb( cr, red, 0.0, 0.0 );
 
     std::memset( input_data.fft_input.get(), 0, input_data.fft_input_size * sizeof( input_data.fft_input[0] ) );
 
     for( size_t i = 0; i < input_data.fft_input_size; i++ ) {
-      float w = 0.5f * ( 1 - std::cos( 2 * std::numbers::pi_v< float > * i / ( input_data.fft_input_size - 1 ) ) );  // Hann window
+      float w = input_data.fft_window[i];
       if( ( i < pcm_frame_count ) && ( ( pcm_frame_offset + i ) < total_frames ) ) {
         float sample = samples[( ( pcm_frame_offset + i ) * channels ) + c];
-        sample = lowpass.filter( sample );   // get high frequencies away
-        sample = highpass.filter( sample );  // get low frequencies away
         input_data.fft_input[i] = sample * w;
       }
     }
 
     fftwf_execute( input_data.fft_plan.get() );
 
-    double x, y;
-    double prev_x = 0.0;
-    for( size_t i = 0; i < input_data.fft_output_size; i++ ) {
-      double freq = static_cast< double >( i ) * sample_rate / static_cast< double >( input_data.fft_input_size );
-      if( freq < min_freq || freq > max_freq )
+    size_t log_bin_count = 20;
+    std::vector< double > log_bin_magnitude_sum( log_bin_count, 0.0 );
+    std::vector< size_t > log_bin_counts( log_bin_count, 0 );
+    {
+      std::function< double( double ) > log_func = []( double f ) { return std::log( f ); };
+      // std::function< double( double ) > log_func = []( double f ) { return std::log10( f ); };
+      // std::function< double( double ) > log_func = []( double f ) { return f; };
+
+      for( size_t i = 0; i < input_data.fft_output_size; i++ ) {
+        double freq = static_cast< double >( i ) * max_freq / double( input_data.fft_output_size );
+
+        double real = input_data.fft_output[i][0];
+        double imag = input_data.fft_output[i][1];
+        double mag = std::sqrt( real * real + imag * imag ) / double( input_data.fft_input_size );
+        double mag_db = 20.0 * std::log10( mag + 1e-6 );
+
+        int32_t bin = static_cast< int32_t >( ( ( log_func( freq ) - log_func( min_freq ) ) / ( log_func( max_freq ) - log_func( min_freq ) ) )
+                                              * double( log_bin_count ) );
+        // if( bin < 0 ) {
+        //   bin = 0;
+        // }
+        if( bin >= log_bin_count ) {
+          bin = log_bin_count - 1;
+        }
+        if( ( bin < 0 ) || ( bin >= log_bin_count ) ) {
+          continue;
+        }
+
+        log_bin_magnitude_sum[bin] += mag_db;
+        log_bin_counts[bin]++;
+      }
+    }
+
+    double x = 0.0;
+    double y = 0.0;
+    double px = x;
+    double py = y;
+    double line_width = width / double( log_bin_count );
+    cairo_set_line_width( cr, line_width * 0.9 );
+    for( size_t bin = 0; bin < log_bin_count; bin++ ) {
+      if( log_bin_counts[bin] == 0 )
         continue;
 
-      double real = input_data.fft_output[i][0];
-      double imaginary = input_data.fft_output[i][1];
-      double mag = std::sqrt( real * real + imaginary * imaginary ) / input_data.fft_input_size;
-      double mag_db = 20.0 * std::log10( mag + 1e-6 );  // Avoid log(0)
-
-      // Normalize
-      double norm_freq = ( freq - min_freq ) / ( max_freq - min_freq );
-      double norm_freq_log = ( std::log( freq ) - std::log( min_freq ) ) / ( std::log( max_freq ) - std::log( min_freq ) );
-      double norm_mag = ( mag_db - min_mag_db ) / ( max_mag_db - min_mag_db );
+      double avg_db = log_bin_magnitude_sum[bin] / double( log_bin_counts[bin] );
+      double norm_mag = ( avg_db - min_mag_db ) / ( max_mag_db - min_mag_db );
       norm_mag = std::clamp( norm_mag, 0.0, 1.0 );
 
-      x = norm_freq_log * width;
+      x = double( bin ) / double( log_bin_count ) * width + ( line_width / 2.0 );
       y = height * ( 1.0 - norm_mag );
 
-      cairo_set_line_width( cr, ( x - prev_x ) * 2.0 );
       cairo_move_to( cr, x, height );
       cairo_line_to( cr, x, y );
       cairo_stroke( cr );
-      prev_x = x;
+      px = x;
+      py = y;
     }
   }
 
@@ -641,18 +663,22 @@ int main( int argc, char** argv ) {
   while( fft_size < pcm_frames_per_output_frame ) {
     fft_size = fft_size << 1;
   }
-  for( int e = 0; e < 3; e++ ) {
-    // extra passes of fft size
-    fft_size = fft_size << 1;
-  }
+  // for( int e = 0; e < 3; e++ ) {
+  //   // extra passes of fft size
+  //   fft_size = fft_size << 1;
+  // }
 
   for( auto& input_list : thread_input_lists ) {
     size_t fft_input_size = fft_size;
     std::shared_ptr< float[] > fft_input = std::make_shared< float[] >( fft_input_size );
+
+    std::shared_ptr< double[] > fft_window = std::make_shared< double[] >( fft_input_size );
+    blackmanharris( fft_window.get(), fft_input_size, false );  // create values for window function
+
     size_t fft_output_size = fft_size / 2 + 1;
     std::shared_ptr< fftwf_complex[] > fft_output = std::make_shared< fftwf_complex[] >( fft_output_size );
     std::shared_ptr< fftwf_plan_s > fft_plan
-        = std::shared_ptr< fftwf_plan_s >( fftwf_plan_dft_r2c_1d( fft_size, fft_input.get(), fft_output.get(), FFTW_ESTIMATE ),
+        = std::shared_ptr< fftwf_plan_s >( fftwf_plan_dft_r2c_1d( fft_size, fft_input.get(), fft_output.get(), FFTW_EXHAUSTIVE ),
                                            []( fftwf_plan p ) { fftwf_destroy_plan( p ); } );
     if( !fft_plan ) {
       spdlog::error( "failed fftwf_plan_dft_r2c_1d!" );
@@ -661,6 +687,7 @@ int main( int argc, char** argv ) {
     for( auto& input_data : input_list ) {
       input_data.fft_input_size = fft_input_size;
       input_data.fft_input = fft_input;
+      input_data.fft_window = fft_window;
       input_data.fft_output_size = fft_output_size;
       input_data.fft_output = fft_output;
       input_data.fft_plan = fft_plan;
