@@ -246,6 +246,14 @@ void draw_samples_on_surface( cairo_surface_t* surface, AudioData const* audio_d
   logger->trace( "exit" );
 }
 
+double A_weighting_db( double f ) {
+  double f2 = f * f;
+  double num = 12200.0 * 12200.0 * f2 * f2;
+  double den = ( f2 + 20.6 * 20.6 ) * std::sqrt( ( f2 + 107.7 * 107.7 ) * ( f2 + 737.9 * 737.9 ) ) * ( f2 + 12200.0 * 12200.0 );
+  double ra = num / den;
+  return 20.0 * std::log10( ra ) + 2.0;  // +2 dB normalization
+}
+
 void draw_freqs_on_surface( cairo_surface_t* surface,
                             ThreadInputData const& input_data,
                             AudioData const* audio_data_ptr,
@@ -303,62 +311,52 @@ void draw_freqs_on_surface( cairo_surface_t* surface,
 
     fftwf_execute( input_data.fft_plan.get() );
 
-    size_t log_bin_count = 20;
-    std::vector< double > log_bin_magnitude_sum( log_bin_count, 0.0 );
-    std::vector< size_t > log_bin_counts( log_bin_count, 0 );
-    {
-      std::function< double( double ) > log_func = []( double f ) { return std::log( f ); };
-      // std::function< double( double ) > log_func = []( double f ) { return std::log10( f ); };
-      // std::function< double( double ) > log_func = []( double f ) { return f; };
-
-      for( size_t i = 0; i < input_data.fft_output_size; i++ ) {
-        double freq = static_cast< double >( i ) * max_freq / double( input_data.fft_output_size );
-
-        double real = input_data.fft_output[i][0];
-        double imag = input_data.fft_output[i][1];
-        double mag = std::sqrt( real * real + imag * imag ) / double( input_data.fft_input_size );
-        double mag_db = 20.0 * std::log10( mag + 1e-6 );
-
-        int32_t bin = static_cast< int32_t >( ( ( log_func( freq ) - log_func( min_freq ) ) / ( log_func( max_freq ) - log_func( min_freq ) ) )
-                                              * double( log_bin_count ) );
-        // if( bin < 0 ) {
-        //   bin = 0;
-        // }
-        if( bin >= log_bin_count ) {
-          bin = log_bin_count - 1;
-        }
-        if( ( bin < 0 ) || ( bin >= log_bin_count ) ) {
-          continue;
-        }
-
-        log_bin_magnitude_sum[bin] += mag_db;
-        log_bin_counts[bin]++;
-      }
-    }
-
     double x = 0.0;
     double y = 0.0;
-    double px = x;
-    double py = y;
-    double line_width = width / double( log_bin_count );
-    cairo_set_line_width( cr, line_width * 0.9 );
-    for( size_t bin = 0; bin < log_bin_count; bin++ ) {
-      if( log_bin_counts[bin] == 0 )
-        continue;
+    double last_norm_mag = 0.0;
 
-      double avg_db = log_bin_magnitude_sum[bin] / double( log_bin_counts[bin] );
-      double norm_mag = ( avg_db - min_mag_db ) / ( max_mag_db - min_mag_db );
+    cairo_new_path( cr );
+    // start at bottom left corner
+    cairo_move_to( cr, 0.0, height );
+
+    for( size_t i = 1; i < input_data.fft_output_size; i++ ) {
+      double freq = static_cast< double >( i ) * sample_rate / static_cast< double >( input_data.fft_input_size );
+      // no need to continue if we draw a big polygon of a path
+      // if( freq < min_freq || freq > max_freq )
+      //   continue;
+
+      // either this
+      double compensation = std::sqrt( freq / min_freq );
+
+      double real = input_data.fft_output[i][0];
+      double imaginary = input_data.fft_output[i][1];
+      double mag = std::sqrt( real * real + imaginary * imaginary ) / input_data.fft_input_size;
+      // either this
+      mag *= compensation;
+      double mag_db = 20.0 * std::log10( mag + 1e-6 );  // Avoid log(0)
+      // or this
+      // mag_db += A_weighting_db( freq );  // Apply perceptual boost
+
+      // Normalize
+      double norm_freq = ( freq - min_freq ) / ( max_freq - min_freq );
+      double norm_freq_log = ( std::log( freq ) - std::log( min_freq ) ) / ( std::log( max_freq ) - std::log( min_freq ) );
+      double norm_mag = ( mag_db - min_mag_db ) / ( max_mag_db - min_mag_db );
       norm_mag = std::clamp( norm_mag, 0.0, 1.0 );
+      last_norm_mag = norm_mag;
 
-      x = double( bin ) / double( log_bin_count ) * width + ( line_width / 2.0 );
+      x = norm_freq_log * width;
       y = height * ( 1.0 - norm_mag );
 
-      cairo_move_to( cr, x, height );
       cairo_line_to( cr, x, y );
-      cairo_stroke( cr );
-      px = x;
-      py = y;
     }
+    // // so the left side doesn't end at the bottom
+    // cairo_line_to( cr, width, height * ( 1.0 - ( last_norm_mag * 0.75 ) ) );
+    // end at bottom right corner
+    cairo_line_to( cr, width, height );
+    cairo_close_path( cr );
+
+    // cairo_stroke( cr );
+    cairo_fill( cr );
   }
 
   cairo_restore( cr );
@@ -663,10 +661,11 @@ int main( int argc, char** argv ) {
   while( fft_size < pcm_frames_per_output_frame ) {
     fft_size = fft_size << 1;
   }
-  // for( int e = 0; e < 3; e++ ) {
-  //   // extra passes of fft size
-  //   fft_size = fft_size << 1;
-  // }
+  int extra_fft = 3; // 3 is max
+  for( int e = 0; e < extra_fft; e++ ) {
+    // extra passes of fft size
+    fft_size = fft_size << 1;
+  }
 
   for( auto& input_list : thread_input_lists ) {
     size_t fft_input_size = fft_size;

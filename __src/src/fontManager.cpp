@@ -1,7 +1,5 @@
 #include "fontManager.h"
 
-#include <filesystem>
-
 #include "freetype/freetype.h"
 #include "loggerFactory.h"
 
