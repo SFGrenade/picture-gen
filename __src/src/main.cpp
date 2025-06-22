@@ -12,7 +12,6 @@
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <memory>
-#include <numbers>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,6 +27,7 @@
 #define VIDEO_HEIGHT 1080
 #define THREAD_COUNT 16
 #define FILTER_ORDER 16
+// #define DO_SAVE_LOWPASS_AUDIO
 
 #define SCALE_WIDTH_FROM_FULLHD( x ) ( double( VIDEO_WIDTH ) * ( double( x ) / 1920.0 ) )
 #define SCALE_HEIGHT_FROM_FULLHD( x ) ( double( VIDEO_HEIGHT ) * ( double( x ) / 1080.0 ) )
@@ -146,6 +146,7 @@ void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
     }
   }
 
+#if defined( DO_SAVE_LOWPASS_AUDIO )
   drwav dw_obj;
   drwav_data_format dw_fmt;
   dw_fmt.container = drwav_container::drwav_container_riff;
@@ -164,6 +165,7 @@ void create_lowpass_for_audio_data( AudioData* audio_data_ptr,
       drwav_uninit( &dw_obj );
     }
   }
+#endif
 
   logger->trace( "exit" );
 }
@@ -286,7 +288,7 @@ void draw_freqs_on_surface( cairo_surface_t* surface,
 
   double const min_freq = 20.0;
   double const max_freq = static_cast< double >( sample_rate ) / 2.0;
-  double const min_mag_db = -120.0;
+  double const min_mag_db = -96.0;
   double const max_mag_db = 0.0;
 
   cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_BUTT );
@@ -661,7 +663,7 @@ int main( int argc, char** argv ) {
   while( fft_size < pcm_frames_per_output_frame ) {
     fft_size = fft_size << 1;
   }
-  int extra_fft = 3; // 3 is max
+  int extra_fft = 3;  // 3 is max
   for( int e = 0; e < extra_fft; e++ ) {
     // extra passes of fft size
     fft_size = fft_size << 1;
