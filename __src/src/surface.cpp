@@ -10,68 +10,72 @@
 #include "loggerFactory.h"
 #include "utils.h"
 
-void surface_blit( cairo_surface_t* src,
-                   cairo_surface_t* dest,
+std::shared_ptr< cairo_surface_t > make_surface_shared_ptr( cairo_surface_t* s ) {
+  return std::shared_ptr< cairo_surface_t >( s, []( cairo_surface_t* p ) { cairo_surface_destroy( p ); } );
+}
+
+void surface_blit( std::shared_ptr< cairo_surface_t > src,
+                   std::shared_ptr< cairo_surface_t > dest,
                    double const dest_x,
                    double const dest_y,
                    double const dest_width,
                    double const dest_height,
                    double const alpha ) {
-  double const src_width = cairo_image_surface_get_width( src );
-  double const src_height = cairo_image_surface_get_height( src );
+  double const src_width = cairo_image_surface_get_width( src.get() );
+  double const src_height = cairo_image_surface_get_height( src.get() );
 
-  cairo_t* cr = cairo_create( dest );
+  cairo_t* cr = cairo_create( dest.get() );
   cairo_save( cr );
 
   cairo_translate( cr, dest_x, dest_y );
   cairo_scale( cr, dest_width / src_width, dest_height / src_height );
-  cairo_set_source_surface( cr, src, 0, 0 );
+  cairo_set_source_surface( cr, src.get(), 0, 0 );
   cairo_paint_with_alpha( cr, std::clamp( alpha, 0.0, 1.0 ) );
 
   cairo_restore( cr );
   cairo_destroy( cr );
 }
 
-cairo_surface_t* surface_load_file( std::filesystem::path const& filepath ) {
-  cairo_surface_t* ret = nullptr;
-  while( ( !ret ) || ( cairo_surface_status( ret ) != cairo_status_t::CAIRO_STATUS_SUCCESS ) ) {
-    ret = cairo_image_surface_create_from_png( filepath.string().c_str() );
+std::shared_ptr< cairo_surface_t > surface_load_file( std::filesystem::path const& filepath ) {
+  std::shared_ptr< cairo_surface_t > ret = nullptr;
+  while( ( !ret ) || ( cairo_surface_status( ret.get() ) != cairo_status_t::CAIRO_STATUS_SUCCESS ) ) {
+    ret = make_surface_shared_ptr( cairo_image_surface_create_from_png( filepath.string().c_str() ) );
   }
   return ret;
 }
 
-cairo_surface_t* surface_create_size( int32_t const width, int32_t const height ) {
-  cairo_surface_t* ret = nullptr;
-  while( ( !ret ) || ( cairo_surface_status( ret ) != cairo_status_t::CAIRO_STATUS_SUCCESS ) ) {
-    ret = cairo_image_surface_create( cairo_format_t::CAIRO_FORMAT_ARGB32, width, height );
+std::shared_ptr< cairo_surface_t > surface_create_size( int32_t const width, int32_t const height ) {
+  std::shared_ptr< cairo_surface_t > ret = nullptr;
+  while( ( !ret ) || ( cairo_surface_status( ret.get() ) != cairo_status_t::CAIRO_STATUS_SUCCESS ) ) {
+    ret = make_surface_shared_ptr( cairo_image_surface_create( cairo_format_t::CAIRO_FORMAT_ARGB32, width, height ) );
   }
   return ret;
 }
 
-cairo_surface_t* surface_embed_in_overlay( cairo_surface_t* surface,
-                                           int32_t const overlay_width,
-                                           int32_t const overlay_height,
-                                           double const x,
-                                           double const y,
-                                           double const width,
-                                           double const height ) {
-  cairo_surface_t* overlay = surface_create_size( overlay_width, overlay_height );
+std::shared_ptr< cairo_surface_t > surface_embed_in_overlay( std::shared_ptr< cairo_surface_t > surface,
+                                                             int32_t const overlay_width,
+                                                             int32_t const overlay_height,
+                                                             double const x,
+                                                             double const y,
+                                                             double const width,
+                                                             double const height ) {
+  std::shared_ptr< cairo_surface_t > overlay = surface_create_size( overlay_width, overlay_height );
 
   surface_blit( surface, overlay, x, y, width, height );
 
   return overlay;
 }
 
-cairo_surface_t* surface_load_file_into_overlay( std::filesystem::path const& filepath,
-                                                 int32_t const overlay_width,
-                                                 int32_t const overlay_height,
-                                                 int32_t const x,
-                                                 int32_t const y,
-                                                 int32_t const width,
-                                                 int32_t const height ) {
-  cairo_surface_t* surface = surface_load_file( filepath );
-  cairo_surface_t* overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
-  cairo_surface_destroy( surface );
+std::shared_ptr< cairo_surface_t > surface_load_file_into_overlay( std::filesystem::path const& filepath,
+                                                                   int32_t const overlay_width,
+                                                                   int32_t const overlay_height,
+                                                                   int32_t const x,
+                                                                   int32_t const y,
+                                                                   int32_t const width,
+                                                                   int32_t const height ) {
+  std::shared_ptr< cairo_surface_t > surface = surface_load_file( filepath );
+  std::shared_ptr< cairo_surface_t > overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
+  surface.reset();
   return overlay;
 }
 
@@ -99,14 +103,14 @@ void int_surface_load_font( FT_Library ft_library, std::filesystem::path const& 
   logger->trace( "exit" );
 }
 
-cairo_surface_t* surface_render_text_into_overlay( cairo_font_face_t* font_face,
-                                                   std::filesystem::path const& filepath,
-                                                   int32_t const overlay_width,
-                                                   int32_t const overlay_height,
-                                                   int32_t const x,
-                                                   int32_t const y,
-                                                   int32_t const width,
-                                                   int32_t const height ) {
+std::shared_ptr< cairo_surface_t > surface_render_text_into_overlay( cairo_font_face_t* font_face,
+                                                                     std::filesystem::path const& filepath,
+                                                                     int32_t const overlay_width,
+                                                                     int32_t const overlay_height,
+                                                                     int32_t const x,
+                                                                     int32_t const y,
+                                                                     int32_t const width,
+                                                                     int32_t const height ) {
   spdlogger logger = LoggerFactory::get_logger( "surface_render_text_into_overlay" );
   logger->trace( "enter: ft_library: {}, filepath: {:?}, overlay_width: {}, overlay_height: {}, x: {}, y: {}, width: {}, height: {}",
                  static_cast< void* >( font_face ),
@@ -138,11 +142,11 @@ cairo_surface_t* surface_render_text_into_overlay( cairo_font_face_t* font_face,
 
   logger->trace( "total_text_height: {}", total_text_height );
 
-  cairo_surface_t* surface = surface_create_size( width, height );
-  cairo_t* cr = cairo_create( surface );
+  std::shared_ptr< cairo_surface_t > surface = surface_create_size( width, height );
+  cairo_t* cr = cairo_create( surface.get() );
   cairo_save( cr );
 
-  logger->trace( "surface: {}", static_cast< void* >( surface ) );
+  logger->trace( "surface: {}", static_cast< void* >( surface.get() ) );
   logger->trace( "cr: {}", static_cast< void* >( cr ) );
 
   cairo_font_options_t* cairo_ft_options = cairo_font_options_create();
@@ -185,20 +189,20 @@ cairo_surface_t* surface_render_text_into_overlay( cairo_font_face_t* font_face,
   cairo_restore( cr );
   cairo_destroy( cr );
 
-  cairo_surface_t* overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
-  cairo_surface_destroy( surface );
+  std::shared_ptr< cairo_surface_t > overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
+  surface.reset();
   return overlay;
 }
 
-cairo_surface_t* surface_render_text_advanced_into_overlay( cairo_font_face_t* header_font_face,
-                                                            cairo_font_face_t* content_font_face,
-                                                            std::filesystem::path const& filepath,
-                                                            int32_t const overlay_width,
-                                                            int32_t const overlay_height,
-                                                            int32_t const x,
-                                                            int32_t const y,
-                                                            int32_t const width,
-                                                            int32_t const height ) {
+std::shared_ptr< cairo_surface_t > surface_render_text_advanced_into_overlay( cairo_font_face_t* header_font_face,
+                                                                              cairo_font_face_t* content_font_face,
+                                                                              std::filesystem::path const& filepath,
+                                                                              int32_t const overlay_width,
+                                                                              int32_t const overlay_height,
+                                                                              int32_t const x,
+                                                                              int32_t const y,
+                                                                              int32_t const width,
+                                                                              int32_t const height ) {
   spdlogger logger = LoggerFactory::get_logger( "surface_render_text_advanced_into_overlay" );
   logger
       ->trace( "enter: header_font_face: {}, content_font_face: {}, filepath: {:?}, overlay_width: {}, overlay_height: {}, x: {}, y: {}, width: {}, height: {}",
@@ -242,11 +246,11 @@ cairo_surface_t* surface_render_text_advanced_into_overlay( cairo_font_face_t* h
   logger->trace( "content_total_text_height: {}", content_total_text_height );
   logger->trace( "total_text_height: {}", total_text_height );
 
-  cairo_surface_t* surface = surface_create_size( width, height );
-  cairo_t* cr = cairo_create( surface );
+  std::shared_ptr< cairo_surface_t > surface = surface_create_size( width, height );
+  cairo_t* cr = cairo_create( surface.get() );
   cairo_save( cr );
 
-  logger->trace( "surface: {}", static_cast< void* >( surface ) );
+  logger->trace( "surface: {}", static_cast< void* >( surface.get() ) );
   logger->trace( "cr: {}", static_cast< void* >( cr ) );
 
   cairo_font_options_t* cairo_ft_options = cairo_font_options_create();
@@ -341,15 +345,15 @@ cairo_surface_t* surface_render_text_advanced_into_overlay( cairo_font_face_t* h
   cairo_restore( cr );
   cairo_destroy( cr );
 
-  cairo_surface_t* overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
-  cairo_surface_destroy( surface );
+  std::shared_ptr< cairo_surface_t > overlay = surface_embed_in_overlay( surface, overlay_width, overlay_height, x, y, width, height );
+  surface.reset();
 
-  logger->trace( "exit: overlay: {}", static_cast< void* >( overlay ) );
+  logger->trace( "exit: overlay: {}", static_cast< void* >( overlay.get() ) );
   return overlay;
 }
 
-void surface_fill( cairo_surface_t* s, double const r, double const g, double const b, double const a ) {
-  cairo_t* cr = cairo_create( s );
+void surface_fill( std::shared_ptr< cairo_surface_t > s, double const r, double const g, double const b, double const a ) {
+  cairo_t* cr = cairo_create( s.get() );
   cairo_save( cr );
 
   cairo_set_source_rgb( cr, r, g, b );
@@ -359,10 +363,10 @@ void surface_fill( cairo_surface_t* s, double const r, double const g, double co
   cairo_destroy( cr );
 }
 
-cairo_surface_t* surface_copy( cairo_surface_t* s ) {
-  double const s_width = cairo_image_surface_get_width( s );
-  double const s_height = cairo_image_surface_get_height( s );
-  cairo_surface_t* ret = surface_create_size( s_width, s_height );
+std::shared_ptr< cairo_surface_t > surface_copy( std::shared_ptr< cairo_surface_t > s ) {
+  double const s_width = cairo_image_surface_get_width( s.get() );
+  double const s_height = cairo_image_surface_get_height( s.get() );
+  std::shared_ptr< cairo_surface_t > ret = surface_create_size( s_width, s_height );
   surface_blit( s, ret, 0, 0, s_width, s_height );
   return ret;
 }
@@ -386,20 +390,24 @@ static uint8_t int_surface_premultiply( uint8_t const channel, uint8_t const alp
  * @param x_offset x offset
  * @param y_offset y offset
  */
-void int_surface_blit_channel( cairo_surface_t* src, cairo_surface_t* dst, int32_t const channel_offset, int32_t const x_offset, int32_t const y_offset ) {
-  cairo_surface_flush( src );
-  cairo_surface_flush( dst );
+void int_surface_blit_channel( std::shared_ptr< cairo_surface_t > src,
+                               std::shared_ptr< cairo_surface_t > dst,
+                               int32_t const channel_offset,
+                               int32_t const x_offset,
+                               int32_t const y_offset ) {
+  cairo_surface_flush( src.get() );
+  cairo_surface_flush( dst.get() );
 
-  uint8_t* src_data = static_cast< uint8_t* >( cairo_image_surface_get_data( src ) );
-  uint8_t* dst_data = static_cast< uint8_t* >( cairo_image_surface_get_data( dst ) );
+  uint8_t* src_data = static_cast< uint8_t* >( cairo_image_surface_get_data( src.get() ) );
+  uint8_t* dst_data = static_cast< uint8_t* >( cairo_image_surface_get_data( dst.get() ) );
 
-  int32_t const src_stride = cairo_image_surface_get_stride( src );
-  int32_t const dst_stride = cairo_image_surface_get_stride( dst );
+  int32_t const src_stride = cairo_image_surface_get_stride( src.get() );
+  int32_t const dst_stride = cairo_image_surface_get_stride( dst.get() );
 
-  int32_t const width = cairo_image_surface_get_width( src );
-  int32_t const height = cairo_image_surface_get_height( src );
-  int32_t const dest_width = cairo_image_surface_get_width( dst );
-  int32_t const dest_height = cairo_image_surface_get_height( dst );
+  int32_t const width = cairo_image_surface_get_width( src.get() );
+  int32_t const height = cairo_image_surface_get_height( src.get() );
+  int32_t const dest_width = cairo_image_surface_get_width( dst.get() );
+  int32_t const dest_height = cairo_image_surface_get_height( dst.get() );
 
   for( int32_t y = 0; y < height; ++y ) {
     for( int32_t x = 0; x < width; ++x ) {
@@ -419,17 +427,17 @@ void int_surface_blit_channel( cairo_surface_t* src, cairo_surface_t* dst, int32
     }
   }
 
-  cairo_surface_mark_dirty( dst );
+  cairo_surface_mark_dirty( dst.get() );
 }
 
-void surface_set_alpha( cairo_surface_t* src ) {
-  int32_t const src_width = cairo_image_surface_get_width( src );
-  int32_t const src_height = cairo_image_surface_get_height( src );
-  int32_t const src_stride = cairo_image_surface_get_stride( src );
+void surface_set_alpha( std::shared_ptr< cairo_surface_t > src ) {
+  int32_t const src_width = cairo_image_surface_get_width( src.get() );
+  int32_t const src_height = cairo_image_surface_get_height( src.get() );
+  int32_t const src_stride = cairo_image_surface_get_stride( src.get() );
 
-  cairo_surface_flush( src );
+  cairo_surface_flush( src.get() );
 
-  uint8_t* src_data = static_cast< uint8_t* >( cairo_image_surface_get_data( src ) );
+  uint8_t* src_data = static_cast< uint8_t* >( cairo_image_surface_get_data( src.get() ) );
 
   for( int32_t y = 0; y < src_height; ++y ) {
     for( int32_t x = 0; x < src_width; ++x ) {
@@ -444,16 +452,16 @@ void surface_set_alpha( cairo_surface_t* src ) {
     }
   }
 
-  cairo_surface_mark_dirty( src );
+  cairo_surface_mark_dirty( src.get() );
 }
 
-void surface_shake_and_blit( cairo_surface_t* source, cairo_surface_t* dest, double shake_intensity, bool red_only ) {
-  int32_t const source_width = cairo_image_surface_get_width( source );
-  int32_t const source_height = cairo_image_surface_get_height( source );
-  int32_t const dest_width = cairo_image_surface_get_width( dest );
-  int32_t const dest_height = cairo_image_surface_get_height( dest );
+void surface_shake_and_blit( std::shared_ptr< cairo_surface_t > source, std::shared_ptr< cairo_surface_t > dest, double shake_intensity, bool red_only ) {
+  int32_t const source_width = cairo_image_surface_get_width( source.get() );
+  int32_t const source_height = cairo_image_surface_get_height( source.get() );
+  int32_t const dest_width = cairo_image_surface_get_width( dest.get() );
+  int32_t const dest_height = cairo_image_surface_get_height( dest.get() );
 
-  cairo_surface_t* shaken = surface_create_size( source_width, source_height );
+  std::shared_ptr< cairo_surface_t > shaken = surface_create_size( source_width, source_height );
   surface_fill( shaken, 0.0, 0.0, 0.0, 1.0 );
 
   std::random_device random_device;
@@ -479,5 +487,5 @@ void surface_shake_and_blit( cairo_surface_t* source, cairo_surface_t* dest, dou
   surface_set_alpha( shaken );
 
   surface_blit( shaken, dest, 0, 0, dest_width, dest_height );
-  cairo_surface_destroy( shaken );
+  shaken.reset();
 }
