@@ -16,6 +16,7 @@ class RegularVideoGenerator {
   static double const BASS_LP_CUTOFF;
   static double const BASS_HP_CUTOFF;
   static uint16_t const EXTRA_FFT_SIZE;
+  static double const FFT_INPUT_SIZE_MULT;
   static double const EPILEPSY_WARNING_VISIBLE_SECONDS;
   static double const EPILEPSY_WARNING_FADEOUT_SECONDS;
   static uint32_t const FFTW_PLAN_FLAGS;

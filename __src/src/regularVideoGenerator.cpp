@@ -25,6 +25,7 @@ int32_t const RegularVideoGenerator::IIR_FILTER_ORDER = 16;
 double const RegularVideoGenerator::BASS_LP_CUTOFF = 80.0;
 double const RegularVideoGenerator::BASS_HP_CUTOFF = 20.0;
 uint16_t const RegularVideoGenerator::EXTRA_FFT_SIZE = 3;
+double const RegularVideoGenerator::FFT_INPUT_SIZE_MULT = 0.5;
 double const RegularVideoGenerator::EPILEPSY_WARNING_VISIBLE_SECONDS = 3.0;
 double const RegularVideoGenerator::EPILEPSY_WARNING_FADEOUT_SECONDS = 2.0;
 // uint32_t const RegularVideoGenerator::FFTW_PLAN_FLAGS = FFTW_EXHAUSTIVE;
@@ -223,8 +224,9 @@ void RegularVideoGenerator::prepare_threads() {
     input_data.i = i;
     input_data.amount_output_frames = frame_information_->amount_output_frames;
     input_data.project_temp_pictureset_picture_path = project_temp_pictureset_path_ / fmt::format( "{}.png", i );
-    input_data.pcm_frame_offset = std::min< int64_t >( audio_data_->total_pcm_frame_count, int64_t( pcm_frame_offset ) - frame_information_->fft_size + 1 );
-    input_data.pcm_frame_count = frame_information_->fft_size;
+    input_data.pcm_frame_count = uint64_t( double( frame_information_->fft_size ) * FFT_INPUT_SIZE_MULT );
+    input_data.pcm_frame_offset
+        = std::min< int64_t >( audio_data_->total_pcm_frame_count, int64_t( pcm_frame_offset ) - int64_t( input_data.pcm_frame_count / 2 ) );
     input_data.audio_data_ptr = audio_data_;
     input_data.common_epilepsy_warning_surface = frame_information_->common_epilepsy_warning_surface;
     input_data.common_bg_surface = frame_information_->common_bg_surface;
