@@ -6,19 +6,41 @@
 #include "window_functions.h"
 
 #include <cmath>
-#include <complex>
-#include <vector>
+#include <numbers>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846264338327
 #endif
 
-#ifndef MY_COMPLEX_BASE
-#define MY_COMPLEX_BASE double
-#endif
-#ifndef MY_COMPLEX
-#define MY_COMPLEX std::complex<MY_COMPLEX_BASE>
-#endif
+double general_goeretzel(std::vector<float> const& samples, int num_samples, double sample_rate, double freq)
+{
+    double const PI = std::numbers::pi_v<double>;
+
+    double BIN = freq / (sample_rate / double(num_samples));
+    double A = 2.0 * PI * BIN / double(num_samples);
+    double B = 2.0 * std::cos(A);
+    MY_COMPLEX C(std::cos(-A), std::sin(-A));
+    MY_COMPLEX D(std::cos(-2.0 * PI * BIN * (double(num_samples) - 1.0) / double(num_samples)), std::sin(-2.0 * PI * BIN * (double(num_samples) - 1.0) / double(num_samples)));
+
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0;
+    for(int32_t si = 0; si < (num_samples - 1); si++) {
+        s0 = samples[si] + (B * s1) - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    s0 = samples[num_samples - 1] + (B * s1) - s2;
+
+    MY_COMPLEX tc1, tc2, out;
+    tc1.real(s0 - s1 * (C.real()));
+    tc1.imag(-(   s1 * (C.imag())));
+
+    tc2.real((tc1.real() * (D.real())) - (tc1.imag() * (D.imag())));
+    tc2.imag((tc1.real() * (D.imag())) + (tc1.imag() * (D.real())));
+
+    out.real(tc2.real());
+    out.imag(tc2.imag());
+    return std::sqrt((out.real() * out.real()) + (out.imag() * out.imag()));
+}
 
 void cosine_window(double * w, unsigned n, const double * coeff, unsigned ncoeff, bool sflag)
 {

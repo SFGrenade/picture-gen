@@ -6,7 +6,19 @@
 #ifndef window_functions_h
 #define window_functions_h
 
+#include <complex>
 #include <cstdbool>
+#include <cstdint>
+#include <vector>
+
+#ifndef MY_COMPLEX_BASE
+#define MY_COMPLEX_BASE double
+#endif
+#ifndef MY_COMPLEX
+#define MY_COMPLEX std::complex<MY_COMPLEX_BASE>
+#endif
+
+double general_goeretzel(std::vector<float> const& samples, int32_t num_samples, double sample_rate, double freq);
 
 // COSINE WINDOWS
 
