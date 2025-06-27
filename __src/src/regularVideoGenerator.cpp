@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "_dr_wav.h"
+#include "_fftw.h"
 #include "cairo.h"
 #include "fontManager.h"
 #include "loggerFactory.h"
@@ -14,18 +15,31 @@
 // #define DO_SAVE_LOWPASS_AUDIO
 // #define DO_SAVE_EPILEPSY_WARNING
 
-std::shared_ptr< fftwf_plan_s > make_fftw_shared_ptr( fftwf_plan s ) {
-  return std::shared_ptr< fftwf_plan_s >( s, []( fftwf_plan p ) { fftwf_destroy_plan( p ); } );
-}
-
 double const RegularVideoGenerator::FPS = 60.0;
 int32_t const RegularVideoGenerator::VIDEO_WIDTH = 1920;
 int32_t const RegularVideoGenerator::VIDEO_HEIGHT = 1080;
 int32_t const RegularVideoGenerator::IIR_FILTER_ORDER = 16;
 double const RegularVideoGenerator::BASS_LP_CUTOFF = 80.0;
 double const RegularVideoGenerator::BASS_HP_CUTOFF = 20.0;
+/*
+  0 => 1024
+  1 => 2048
+  2 => 4096
+  3 => 8192
+  4 => 16384
+  5 => 32768
+*/
 uint16_t const RegularVideoGenerator::EXTRA_FFT_SIZE = 3;
-double const RegularVideoGenerator::FFT_INPUT_SIZE_MULT = 0.5;
+/*
+  to keep 4096 samples:
+  0 => 4.0
+  1 => 2.0
+  2 => 1.0
+  3 => 0.5
+  4 => 0.25
+  5 => 0.125
+*/
+double const RegularVideoGenerator::FFT_INPUT_SIZE_MULT = 4.0 * std::pow< double >( 0.5, RegularVideoGenerator::EXTRA_FFT_SIZE );
 double const RegularVideoGenerator::EPILEPSY_WARNING_VISIBLE_SECONDS = 3.0;
 double const RegularVideoGenerator::EPILEPSY_WARNING_FADEOUT_SECONDS = 2.0;
 // uint32_t const RegularVideoGenerator::FFTW_PLAN_FLAGS = FFTW_EXHAUSTIVE;
@@ -35,7 +49,7 @@ std::string const RegularVideoGenerator::EPILEPSY_WARNING_CONTENT_FONT = "arial_
 double const RegularVideoGenerator::FFT_DISPLAY_MIN_FREQ = 20.0;
 double const RegularVideoGenerator::FFT_DISPLAY_MAX_FREQ = 44100.0;
 double const RegularVideoGenerator::FFT_DISPLAY_MIN_MAG = -96.0;
-double const RegularVideoGenerator::FFT_DISPLAY_MAX_MAG = 0.0;
+double const RegularVideoGenerator::FFT_DISPLAY_MAX_MAG = -10.0;
 
 spdlogger RegularVideoGenerator::logger_ = nullptr;
 bool RegularVideoGenerator::is_ready_ = false;
@@ -112,6 +126,8 @@ void RegularVideoGenerator::render() {
   start_threads();
 
   join_threads();
+
+  clean_up();
 
   logger_->trace( "[render] exit" );
 }
@@ -314,6 +330,33 @@ void RegularVideoGenerator::join_threads() {
   logger_->trace( "[join_threads] exit" );
 }
 
+void RegularVideoGenerator::clean_up() {
+  logger_->trace( "[clean_up] enter" );
+
+  if( !is_ready_ ) {
+    logger_->error( "[clean_up] generator is not ready!" );
+    return;
+  }
+
+  // from prepare_surfaces
+  // keep epilepsy_warning_surface
+
+  // from calculate_frames
+  frame_information_.reset();
+
+  // from prepare_audio
+  // keep __filtered_#_#.wav
+  audio_data_.reset();
+
+  // don't delete things other programs still need
+  // // from init
+  // if( std::filesystem::is_directory( project_temp_pictureset_path_ ) ) {
+  //   std::filesystem::remove_all( project_temp_pictureset_path_ );
+  // }
+
+  logger_->trace( "[clean_up] exit" );
+}
+
 void RegularVideoGenerator::save_surface( std::shared_ptr< cairo_surface_t > surface, std::filesystem::path const& file_path ) {
   logger_->trace( "[save_surface] enter: surface: {}, file_path: {:?}", static_cast< void* >( surface.get() ), file_path.string() );
 
@@ -487,18 +530,6 @@ void RegularVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surf
   logger_->trace( "[draw_samples_on_surface] exit" );
 }
 
-#pragma region FREQUENCY HELPING STUFF
-
-double A_weighting_db( double f ) {
-  double f2 = f * f;
-  double num = 12200.0 * 12200.0 * f2 * f2;
-  double den = ( f2 + 20.6 * 20.6 ) * std::sqrt( ( f2 + 107.7 * 107.7 ) * ( f2 + 737.9 * 737.9 ) ) * ( f2 + 12200.0 * 12200.0 );
-  double ra = num / den;
-  return 20.0 * std::log10( ra ) + 2.0;  // +2 dB normalization
-}
-
-#pragma endregion HELPING STUFF
-
 void RegularVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surface_t > surface, RegularVideoGenerator::ThreadInputData const& input_data ) {
   logger_->trace( "[draw_freqs_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
 
@@ -530,10 +561,9 @@ void RegularVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surfac
 
     std::memset( input_data.fft_input.get(), 0, input_data.fft_input_size * sizeof( input_data.fft_input[0] ) );
 
-    for( int64_t i = 0; i < input_data.fft_input_size; i++ ) {
+    for( int64_t i = 0; i < input_data.pcm_frame_count; i++ ) {
       float w = input_data.fft_window[i];
-      if( ( i < input_data.pcm_frame_count ) && ( ( input_data.pcm_frame_offset + i ) >= 0 )
-          && ( ( input_data.pcm_frame_offset + i ) < audio_data_->total_pcm_frame_count ) ) {
+      if( ( ( input_data.pcm_frame_offset + i ) >= 0 ) && ( ( input_data.pcm_frame_offset + i ) < audio_data_->total_pcm_frame_count ) ) {
         float sample = audio_data_->sample_data[( ( input_data.pcm_frame_offset + i ) * audio_data_->channels ) + c];
         input_data.fft_input[i] = sample * w;
       }
@@ -543,7 +573,6 @@ void RegularVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surfac
 
     double x = 0.0;
     double y = 0.0;
-    double last_norm_mag = 0.0;
 
     cairo_new_path( cr );
     // start at bottom left corner
@@ -572,15 +601,12 @@ void RegularVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surfac
       double norm_freq_log = ( std::log( freq ) - std::log( min_freq ) ) / ( std::log( max_freq ) - std::log( min_freq ) );
       double norm_mag = ( mag_db - FFT_DISPLAY_MIN_MAG ) / ( FFT_DISPLAY_MAX_MAG - FFT_DISPLAY_MIN_MAG );
       norm_mag = std::clamp( norm_mag, 0.0, 1.0 );
-      last_norm_mag = norm_mag;
 
       x = norm_freq_log * width;
       y = height * ( 1.0 - norm_mag );
 
       cairo_line_to( cr, x, y );
     }
-    // // so the left side doesn't end at the bottom
-    // cairo_line_to( cr, width, height * ( 1.0 - ( last_norm_mag * 0.75 ) ) );
     // end at bottom right corner
     cairo_line_to( cr, width, height );
     cairo_close_path( cr );

@@ -86,6 +86,7 @@ class RegularVideoGenerator {
   static void prepare_fft();
   static void start_threads();
   static void join_threads();
+  static void clean_up();
 
   private:
   static void save_surface( std::shared_ptr< cairo_surface_t > surface, std::filesystem::path const& file_path );
