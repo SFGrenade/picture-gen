@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "_dr_wav.h"
+#include "circleVideoGenerator.h"
 #include "fontManager.h"
 #include "loggerFactory.h"
 #include "regularVideoGenerator.h"
@@ -85,11 +86,14 @@ int main( int argc, char** argv ) {
 
   FontManager::init( common_path / "__fonts" );
 
-  RegularVideoGenerator::init( project_path, common_path );
+  CircleVideoGenerator::init( project_path, common_path );
+  // RegularVideoGenerator::init( project_path, common_path );
 
-  RegularVideoGenerator::render();
+  CircleVideoGenerator::render();
+  // RegularVideoGenerator::render();
 
-  RegularVideoGenerator::deinit();
+  CircleVideoGenerator::deinit();
+  // RegularVideoGenerator::deinit();
 
   FontManager::deinit();
 

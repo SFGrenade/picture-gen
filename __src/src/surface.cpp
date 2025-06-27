@@ -7,6 +7,7 @@
 #include <fmt/std.h>
 #include <random>
 
+#include "cairo.h"
 #include "loggerFactory.h"
 #include "utils.h"
 
