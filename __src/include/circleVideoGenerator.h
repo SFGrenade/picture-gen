@@ -25,8 +25,8 @@ class CircleVideoGenerator {
   static uint32_t const FFTW_PLAN_FLAGS;
   static std::string const EPILEPSY_WARNING_HEADER_FONT;
   static std::string const EPILEPSY_WARNING_CONTENT_FONT;
-  static uint32_t const FFT_DISPLAY_BIN_AMOUNT;
   static double const FFT_COMPUTE_ALPHA;
+  static uint32_t const FFT_DISPLAY_BIN_AMOUNT;
   static double const FFT_DISPLAY_MIN_FREQ;
   static double const FFT_DISPLAY_MAX_FREQ;
   static double const FFT_DISPLAY_MIN_MAG_DB;
@@ -64,32 +64,19 @@ class CircleVideoGenerator {
     std::shared_ptr< cairo_surface_t > common_circle_surface = nullptr;
     std::shared_ptr< cairo_surface_t > project_art_surface = nullptr;
     std::shared_ptr< cairo_surface_t > static_text_surface = nullptr;
-    // std::shared_ptr< fftwf_plan_s > fft_plan = nullptr;
-    // uint64_t fft_input_size;
-    // std::shared_ptr< float[] > fft_input = nullptr;
-    // std::shared_ptr< double[] > fft_window = nullptr;
-    // uint64_t fft_output_size;
-    // std::shared_ptr< fftwf_complex[] > fft_output = nullptr;
-    // std::shared_ptr< fftwf_plan_s > fancy_fft_plan = nullptr;
-    // uint64_t fancy_fft_input_size;
-    // std::shared_ptr< float[] > fancy_fft_input = nullptr;
-    // std::shared_ptr< double[] > fancy_fft_window = nullptr;
-    // uint64_t fancy_fft_output_size;
-    // std::shared_ptr< fftwf_complex[] > fancy_fft_output = nullptr;
-    std::shared_ptr< std::vector< std::pair< double, double > > > fft_output;
+    // list of (freq, mag_db)
+    std::shared_ptr< std::vector< std::pair< double, double > > > fft_display_values;
   };
   struct FrameInformation {
     size_t amount_output_frames;
     double pcm_frames_per_output_frame;
-    // size_t fft_size;
-    // size_t fancy_fft_size;
     std::shared_ptr< cairo_surface_t > common_epilepsy_warning_surface = nullptr;
     std::shared_ptr< cairo_surface_t > common_bg_surface = nullptr;
     std::shared_ptr< cairo_surface_t > common_circle_surface = nullptr;
     std::shared_ptr< cairo_surface_t > project_art_surface = nullptr;
     std::shared_ptr< cairo_surface_t > static_text_surface = nullptr;
-    // list of list of (freq, mag)
-    std::vector< std::shared_ptr< std::vector< std::pair< double, double > > > > fft_output_values_per_frame;
+    // list of list of (freq, mag_db)
+    std::vector< std::shared_ptr< std::vector< std::pair< double, double > > > > fft_display_values_per_frame;
     std::vector< std::vector< CircleVideoGenerator::ThreadInputData > > thread_input_lists;
     std::vector< std::thread > thread_list;
   };
@@ -115,7 +102,7 @@ class CircleVideoGenerator {
   static void create_lowpass_for_audio_data();
   static void create_epilepsy_warning();
 
-  static void draw_samples_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data );
+  static void draw_point_cloud_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data );
   static void draw_freqs_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data );
   static void thread_run( std::vector< CircleVideoGenerator::ThreadInputData > inputs );
 

@@ -53,9 +53,9 @@ double const CircleVideoGenerator::EPILEPSY_WARNING_FADEOUT_SECONDS = 2.0;
 uint32_t const CircleVideoGenerator::FFTW_PLAN_FLAGS = FFTW_ESTIMATE;
 std::string const CircleVideoGenerator::EPILEPSY_WARNING_HEADER_FONT = "BarberChop.otf";
 std::string const CircleVideoGenerator::EPILEPSY_WARNING_CONTENT_FONT = "arial_narrow_7.ttf";
-uint32_t const CircleVideoGenerator::FFT_DISPLAY_BIN_AMOUNT = 512;
 // 0.0 = max smooth, 1.0 = no smooth
 double const CircleVideoGenerator::FFT_COMPUTE_ALPHA = 0.7;
+uint32_t const CircleVideoGenerator::FFT_DISPLAY_BIN_AMOUNT = 512;
 double const CircleVideoGenerator::FFT_DISPLAY_MIN_FREQ = 20.0;
 double const CircleVideoGenerator::FFT_DISPLAY_MAX_FREQ = 200.0;
 // NONE: { 30.0, 71.0 }
@@ -68,7 +68,7 @@ double const CircleVideoGenerator::FFT_DISPLAY_MAX_FREQ = 200.0;
 // nuttall octave: { 40.0, 80.0 }
 // flattop: { ???, ??? }
 // flattop octave: { ???, ??? }
-double const CircleVideoGenerator::FFT_DISPLAY_MIN_MAG_DB = -30.0;
+double const CircleVideoGenerator::FFT_DISPLAY_MIN_MAG_DB = -35.0;
 double const CircleVideoGenerator::FFT_DISPLAY_MAX_MAG_DB = -5.0;
 double const CircleVideoGenerator::FFT_DISPLAY_MIN_RADIUS = 270;
 double const CircleVideoGenerator::FFT_DISPLAY_MAX_RADIUS = 540;
@@ -308,7 +308,7 @@ void CircleVideoGenerator::prepare_fft() {
     return;
   }
 
-  frame_information_->fft_output_values_per_frame.reserve( frame_information_->amount_output_frames );
+  frame_information_->fft_display_values_per_frame.reserve( frame_information_->amount_output_frames );
 
   uint64_t pcm_frame_count = uint64_t( double( frame_information_->pcm_frames_per_output_frame ) * PCM_FRAME_COUNT_MULT );
   logger_->trace( "[prepare_fft] pcm_frame_count: {}", pcm_frame_count );
@@ -372,8 +372,8 @@ void CircleVideoGenerator::prepare_fft() {
     double max_mag_freq = 0.0;
     double max_mag = -min_mag;
 
-    std::vector< std::pair< double, double > > fft_output_vals;
-    fft_output_vals.reserve( fft_output_size - 1 );
+    std::vector< std::pair< double, double > > fft_display_vals;
+    fft_display_vals.reserve( fft_output_size - 1 );
 
     for( uint32_t fi = 0; fi < fft_output_size - 1; fi++ ) {
       double freq = double( fi + 1 ) * double( audio_data_->sample_rate ) / double( fft_size );
@@ -386,7 +386,7 @@ void CircleVideoGenerator::prepare_fft() {
       double mag = std::sqrt( ( mag_real * mag_real ) + ( mag_imag * mag_imag ) ) * mag_compensation / double( fft_size );
       val.second = 20.0 * std::log10( mag + 1e-12 );
       val.second = std::clamp( val.second, FFT_DISPLAY_MIN_MAG_DB, FFT_DISPLAY_MAX_MAG_DB );
-      fft_output_vals.push_back( val );
+      fft_display_vals.push_back( val );
 
       if( ( val.second ) < min_mag ) {
         min_mag_freq = val.first;
@@ -398,9 +398,9 @@ void CircleVideoGenerator::prepare_fft() {
       }
     }
 
-    std::shared_ptr< std::vector< std::pair< double, double > > > formatted_fft_output_values
+    std::shared_ptr< std::vector< std::pair< double, double > > > formatted_fft_display_values
         = std::make_shared< std::vector< std::pair< double, double > > >();
-    formatted_fft_output_values->reserve( fft_output_size - 1 );
+    formatted_fft_display_values->reserve( fft_output_size - 1 );
 
     for( uint32_t bin = 0; bin < FFT_DISPLAY_BIN_AMOUNT; bin++ ) {
       double relative_freq = double( bin ) / double( FFT_DISPLAY_BIN_AMOUNT - 1 );
@@ -412,15 +412,16 @@ void CircleVideoGenerator::prepare_fft() {
       double t = fft_freq_bin - double( a_index );
       std::pair< double, double > val;
       val.first = freq;
-      // todo: fixme: change this lerp to something like what chatgpt told me
-      // val.second = std::lerp( fft_output_vals[a_index].second, fft_output_vals[b_index].second, t );
-      val.second = catmullRom( fft_output_vals[a_index - 1], fft_output_vals[a_index], fft_output_vals[b_index], fft_output_vals[b_index + 1], t ).second;
-      if( frame_information_->fft_output_values_per_frame.size() > 0 ) {
+
+      // val.second = std::lerp( fft_display_vals[a_index].second, fft_display_vals[b_index].second, t );
+      val.second = catmullRom( fft_display_vals[a_index - 1], fft_display_vals[a_index], fft_display_vals[b_index], fft_display_vals[b_index + 1], t ).second;
+      if( frame_information_->fft_display_values_per_frame.size() > 0 ) {
         // apply smoothing
         val.second
-            = ( FFT_COMPUTE_ALPHA * val.second ) + ( ( 1.0 - FFT_COMPUTE_ALPHA ) * frame_information_->fft_output_values_per_frame.back()->at( bin ).second );
+            = ( FFT_COMPUTE_ALPHA * val.second ) + ( ( 1.0 - FFT_COMPUTE_ALPHA ) * frame_information_->fft_display_values_per_frame.back()->at( bin ).second );
       }
-      formatted_fft_output_values->push_back( val );
+
+      formatted_fft_display_values->push_back( val );
     }
 
     logger_->debug( "[prepare_threads] output frame {} has compensated fft vals (min_mag: {} dB at {} Hz, max_mag: {} dB at {} Hz)",
@@ -429,7 +430,7 @@ void CircleVideoGenerator::prepare_fft() {
                     min_mag_freq,
                     max_mag,
                     max_mag_freq );
-    frame_information_->fft_output_values_per_frame.push_back( formatted_fft_output_values );
+    frame_information_->fft_display_values_per_frame.push_back( formatted_fft_display_values );
 
     pcm_frame_offset_dbl += frame_information_->pcm_frames_per_output_frame;
   }
@@ -470,7 +471,7 @@ void CircleVideoGenerator::prepare_threads() {
     input_data.common_circle_surface = frame_information_->common_circle_surface;
     input_data.project_art_surface = frame_information_->project_art_surface;
     input_data.static_text_surface = frame_information_->static_text_surface;
-    input_data.fft_output = frame_information_->fft_output_values_per_frame[i];
+    input_data.fft_display_values = frame_information_->fft_display_values_per_frame[i];
     // logger_->debug( "[prepare_threads] output frame {} from sample {} to {}",
     //                 input_data.i,
     //                 input_data.pcm_frame_offset,
@@ -650,15 +651,15 @@ void CircleVideoGenerator::create_epilepsy_warning() {
   logger_->trace( "[create_epilepsy_warning] exit" );
 }
 
-void CircleVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data ) {
-  // logger_->trace( "[draw_samples_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
+void CircleVideoGenerator::draw_point_cloud_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data ) {
+  // logger_->trace( "[draw_point_cloud_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
 
   if( !is_ready_ ) {
-    logger_->error( "[draw_samples_on_surface] generator is not ready!" );
+    logger_->error( "[draw_point_cloud_on_surface] generator is not ready!" );
     return;
   }
 
-  // logger_->trace( "[draw_samples_on_surface] exit" );
+  // logger_->trace( "[draw_point_cloud_on_surface] exit" );
   return;
 
   /*
@@ -676,7 +677,7 @@ void CircleVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surfa
   double prev_y = middle_y;
   double x = 0.0;
   double y = middle_y;
-  // logger->debug( "draw_samples_on_surface - {} frames for {} pixels", frame_duration, surface_w );
+  // logger->debug( "draw_point_cloud_on_surface - {} frames for {} pixels", frame_duration, surface_w );
 
   cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
   // default is 2.0
@@ -717,7 +718,7 @@ void CircleVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surfa
   cairo_restore( cr );
   cairo_destroy( cr );
 
-  logger_->trace( "[draw_samples_on_surface] exit" );
+  logger_->trace( "[draw_point_cloud_on_surface] exit" );
   */
 }
 
@@ -767,8 +768,8 @@ void CircleVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surface
   {
     std::vector< std::pair< double, double > > freq_mags;
 
-    for( int64_t i = 0; i < input_data.fft_output->size(); i++ ) {
-      auto const& pair = input_data.fft_output->at( i );
+    for( int64_t i = 0; i < input_data.fft_display_values->size(); i++ ) {
+      auto const& pair = input_data.fft_display_values->at( i );
 
       double freq = pair.first;
       double mag_db = pair.second;
@@ -931,14 +932,14 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
     // double const circle_intensity_scale = 0.5;
     // double const colour_displace_intensity_scale = 0.15;
 
-    std::shared_ptr< cairo_surface_t > copied_bg_surface = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
-    std::shared_ptr< cairo_surface_t > dynamic_waves_surface = surface_create_size( dynamic_waves_dest_rect.width, dynamic_waves_dest_rect.height );
+    std::shared_ptr< cairo_surface_t > dynamic_freq_response_surface = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
+    std::shared_ptr< cairo_surface_t > dynamic_point_cloud_surface = surface_create_size( dynamic_waves_dest_rect.width, dynamic_waves_dest_rect.height );
     std::shared_ptr< cairo_surface_t > dynamic_freqs_surface = surface_create_size( dynamic_freqs_dest_rect.width, dynamic_freqs_dest_rect.height );
 
     try {
-      draw_samples_on_surface( dynamic_waves_surface, input_data );
+      draw_point_cloud_on_surface( dynamic_point_cloud_surface, input_data );
     } catch( std::exception const& e ) {
-      logger_->error( "[thread_run] error in draw_samples_on_surface: {}", e.what() );
+      logger_->error( "[thread_run] error in draw_point_cloud_on_surface: {}", e.what() );
     }
     try {
       draw_freqs_on_surface( dynamic_freqs_surface, input_data );
@@ -946,23 +947,23 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
       logger_->error( "[thread_run] error in draw_freqs_on_surface: {}", e.what() );
     }
 
-    surface_blit( dynamic_waves_surface,
-                  copied_bg_surface,
+    surface_blit( dynamic_point_cloud_surface,
+                  dynamic_freq_response_surface,
                   dynamic_waves_dest_rect.x,
                   dynamic_waves_dest_rect.y,
                   dynamic_waves_dest_rect.width,
                   dynamic_waves_dest_rect.height );
     surface_blit( dynamic_freqs_surface,
-                  copied_bg_surface,
+                  dynamic_freq_response_surface,
                   dynamic_freqs_dest_rect.x,
                   dynamic_freqs_dest_rect.y,
                   dynamic_freqs_dest_rect.width,
                   dynamic_freqs_dest_rect.height );
     dynamic_freqs_surface.reset();
-    dynamic_waves_surface.reset();
+    dynamic_point_cloud_surface.reset();
 
-    surface_shake_and_blit( copied_bg_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ), true );
-    copied_bg_surface.reset();
+    surface_shake_and_blit( dynamic_freq_response_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ), true );
+    dynamic_freq_response_surface.reset();
 
     // put art on canvas, shakily
     surface_shake_and_blit( input_data.project_art_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ) );
