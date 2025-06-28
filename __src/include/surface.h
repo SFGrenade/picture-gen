@@ -7,6 +7,8 @@
 
 std::shared_ptr< cairo_surface_t > make_surface_shared_ptr( cairo_surface_t* s );
 
+std::shared_ptr< cairo_pattern_t > make_pattern_shared_ptr( cairo_pattern_t* s );
+
 void surface_blit( std::shared_ptr< cairo_surface_t > src,
                    std::shared_ptr< cairo_surface_t > dest,
                    double const dest_x,

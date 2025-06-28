@@ -15,6 +15,10 @@ std::shared_ptr< cairo_surface_t > make_surface_shared_ptr( cairo_surface_t* s )
   return std::shared_ptr< cairo_surface_t >( s, []( cairo_surface_t* p ) { cairo_surface_destroy( p ); } );
 }
 
+std::shared_ptr< cairo_pattern_t > make_pattern_shared_ptr( cairo_pattern_t* s ) {
+  return std::shared_ptr< cairo_pattern_t >( s, []( cairo_pattern_t* p ) { cairo_pattern_destroy( p ); } );
+}
+
 void surface_blit( std::shared_ptr< cairo_surface_t > src,
                    std::shared_ptr< cairo_surface_t > dest,
                    double const dest_x,
@@ -28,10 +32,16 @@ void surface_blit( std::shared_ptr< cairo_surface_t > src,
   cairo_t* cr = cairo_create( dest.get() );
   cairo_save( cr );
 
+  // cairo_set_operator( cr, CAIRO_OPERATOR_ATOP );
   cairo_translate( cr, dest_x, dest_y );
   cairo_scale( cr, dest_width / src_width, dest_height / src_height );
   cairo_set_source_surface( cr, src.get(), 0, 0 );
-  cairo_paint_with_alpha( cr, std::clamp( alpha, 0.0, 1.0 ) );
+  if( alpha >= 1.0 ) {
+    cairo_paint( cr );
+  } else {
+    cairo_paint_with_alpha( cr, std::clamp( alpha, 0.0, 1.0 ) );
+  }
+  // cairo_paint_with_alpha( cr, std::clamp( alpha, 0.0, 1.0 ) );
 
   cairo_restore( cr );
   cairo_destroy( cr );
@@ -357,8 +367,8 @@ void surface_fill( std::shared_ptr< cairo_surface_t > s, double const r, double 
   cairo_t* cr = cairo_create( s.get() );
   cairo_save( cr );
 
-  cairo_set_source_rgb( cr, r, g, b );
-  cairo_paint_with_alpha( cr, a );
+  cairo_set_source_rgba( cr, r, g, b, a );
+  cairo_paint( cr );
 
   cairo_restore( cr );
   cairo_destroy( cr );
@@ -375,7 +385,7 @@ std::shared_ptr< cairo_surface_t > surface_copy( std::shared_ptr< cairo_surface_
 static uint8_t int_surface_unpremultiply( uint8_t const channel, uint8_t const alpha ) {
   if( alpha == 0 )
     return 0;
-  return std::clamp( std::round( ( double( channel ) * 255.0 + double( alpha ) / 2.0 ) / double( alpha ) ), 0.0, 255.0 );
+  return std::clamp( std::round( ( double( channel ) * 255.0 ) / double( alpha ) ), 0.0, 255.0 );
 }
 
 static uint8_t int_surface_premultiply( uint8_t const channel, uint8_t const alpha ) {
@@ -422,9 +432,10 @@ void int_surface_blit_channel( std::shared_ptr< cairo_surface_t > src,
       int32_t dst_y = my_mod( y + y_offset, dest_height );
 
       int32_t dst_idx = dst_y * dst_stride + dst_x * 4;
-      uint8_t dst_alpha = src_alpha;  // dst_data[dst_idx + 3];
+      uint8_t dst_alpha = std::max( src_alpha, dst_data[dst_idx + 3] );
 
       dst_data[dst_idx + channel_offset] = int_surface_premultiply( src_val, dst_alpha );
+      dst_data[dst_idx + 3] = dst_alpha;  // maybe a good idea? maybe not, who knows
     }
   }
 
@@ -463,7 +474,7 @@ void surface_shake_and_blit( std::shared_ptr< cairo_surface_t > source, std::sha
   int32_t const dest_height = cairo_image_surface_get_height( dest.get() );
 
   std::shared_ptr< cairo_surface_t > shaken = surface_create_size( source_width, source_height );
-  surface_fill( shaken, 0.0, 0.0, 0.0, 1.0 );
+  // surface_fill( shaken, 0.0, 0.0, 0.0, 1.0 );
 
   std::random_device random_device;
   std::mt19937_64 gen( random_device() );
@@ -485,7 +496,7 @@ void surface_shake_and_blit( std::shared_ptr< cairo_surface_t > source, std::sha
   int_surface_blit_channel( source, shaken, 2, x_offset_red, y_offset_red );
   int_surface_blit_channel( source, shaken, 1, x_offset_green, y_offset_green );
   int_surface_blit_channel( source, shaken, 0, x_offset_blue, y_offset_blue );
-  surface_set_alpha( shaken );
+  // surface_set_alpha( shaken );
 
   surface_blit( shaken, dest, 0, 0, dest_width, dest_height );
   shaken.reset();

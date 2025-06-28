@@ -70,6 +70,8 @@ double const CircleVideoGenerator::FFT_DISPLAY_MAX_FREQ = 200.0;
 // flattop octave: { ???, ??? }
 double const CircleVideoGenerator::FFT_DISPLAY_MIN_MAG_DB = -30.0;
 double const CircleVideoGenerator::FFT_DISPLAY_MAX_MAG_DB = -5.0;
+double const CircleVideoGenerator::FFT_DISPLAY_MIN_RADIUS = 270;
+double const CircleVideoGenerator::FFT_DISPLAY_MAX_RADIUS = 540;
 
 spdlogger CircleVideoGenerator::logger_ = nullptr;
 bool CircleVideoGenerator::is_ready_ = false;
@@ -228,12 +230,45 @@ void CircleVideoGenerator::prepare_surfaces() {
   create_epilepsy_warning();
   frame_information_->common_bg_surface = surface_load_file( common_bg_path_ );
   frame_information_->common_circle_surface = surface_load_file( common_circle_path_ );
-  frame_information_->project_art_surface = surface_load_file_into_overlay( project_art_path_, VIDEO_WIDTH, VIDEO_HEIGHT, 24, 24, 917, 812 );
-  logger_->debug( "[prepare_surfaces] frame_information_->common_epilepsy_warning_surface: {}",
-                  static_cast< void* >( frame_information_->common_epilepsy_warning_surface.get() ) );
-  logger_->debug( "[prepare_surfaces] frame_information_->common_bg_surface: {}", static_cast< void* >( frame_information_->common_bg_surface.get() ) );
-  logger_->debug( "[prepare_surfaces] frame_information_->common_circle_surface: {}", static_cast< void* >( frame_information_->common_circle_surface.get() ) );
-  logger_->debug( "[prepare_surfaces] frame_information_->project_art_surface: {}", static_cast< void* >( frame_information_->project_art_surface.get() ) );
+  {
+    std::shared_ptr< cairo_surface_t > raw_art_surface = surface_load_file( project_art_path_ );
+    double raw_art_width = cairo_image_surface_get_width( raw_art_surface.get() );
+    double raw_art_height = cairo_image_surface_get_height( raw_art_surface.get() );
+
+    std::shared_ptr< cairo_surface_t > centered_scaled_art = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
+    std::shared_ptr< cairo_surface_t > centered_circle = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
+
+    double smallest_side = std::min( raw_art_width, raw_art_height );
+    double raw_art_scale = ( FFT_DISPLAY_MIN_RADIUS * 2.0 ) / smallest_side;
+
+    {
+      double dest_x = ( VIDEO_WIDTH - ( raw_art_width * raw_art_scale ) ) / 2.0;
+      double dest_y = ( VIDEO_HEIGHT - ( raw_art_height * raw_art_scale ) ) / 2.0;
+      surface_blit( raw_art_surface, centered_scaled_art, dest_x, dest_y, raw_art_width * raw_art_scale, raw_art_height * raw_art_scale );
+    }
+
+    {
+      std::shared_ptr< cairo_pattern_t > circle_pattern = make_pattern_shared_ptr( cairo_pattern_create_radial( VIDEO_WIDTH / 2.0,
+                                                                                                                VIDEO_HEIGHT / 2.0,
+                                                                                                                FFT_DISPLAY_MIN_RADIUS * 0.9,
+                                                                                                                VIDEO_WIDTH / 2.0,
+                                                                                                                VIDEO_HEIGHT / 2.0,
+                                                                                                                FFT_DISPLAY_MIN_RADIUS ) );
+      cairo_pattern_add_color_stop_rgba( circle_pattern.get(), 0.0, 1.0, 1.0, 1.0, 1.0 );
+      cairo_pattern_add_color_stop_rgba( circle_pattern.get(), 1.0, 1.0, 1.0, 1.0, 0.0 );
+
+      cairo_t* cr = cairo_create( centered_circle.get() );
+      cairo_save( cr );
+
+      cairo_set_source_surface( cr, centered_scaled_art.get(), 0, 0 );
+      cairo_mask( cr, circle_pattern.get() );
+
+      cairo_restore( cr );
+      cairo_destroy( cr );
+    }
+
+    frame_information_->project_art_surface = centered_circle;
+  }
   frame_information_->static_text_surface = surface_render_text_into_overlay( FontManager::get_font_face( "Roboto-Regular.ttf" ),
                                                                               project_title_path_,
                                                                               VIDEO_WIDTH,
@@ -242,6 +277,12 @@ void CircleVideoGenerator::prepare_surfaces() {
                                                                               24,
                                                                               917,
                                                                               387 );
+
+  logger_->debug( "[prepare_surfaces] frame_information_->common_epilepsy_warning_surface: {}",
+                  static_cast< void* >( frame_information_->common_epilepsy_warning_surface.get() ) );
+  logger_->debug( "[prepare_surfaces] frame_information_->common_bg_surface: {}", static_cast< void* >( frame_information_->common_bg_surface.get() ) );
+  logger_->debug( "[prepare_surfaces] frame_information_->common_circle_surface: {}", static_cast< void* >( frame_information_->common_circle_surface.get() ) );
+  logger_->debug( "[prepare_surfaces] frame_information_->project_art_surface: {}", static_cast< void* >( frame_information_->project_art_surface.get() ) );
   logger_->debug( "[prepare_surfaces] frame_information_->static_text_surface: {}", static_cast< void* >( frame_information_->static_text_surface.get() ) );
 
   logger_->trace( "[prepare_surfaces] exit" );
@@ -609,62 +650,6 @@ void CircleVideoGenerator::create_epilepsy_warning() {
   logger_->trace( "[create_epilepsy_warning] exit" );
 }
 
-double CircleVideoGenerator::goertzel_magnitude( std::vector< float > const& signal, double freq ) {
-  // logger_->trace( "[goertzel_magnitude] enter: signal: {}, freq: {}", signal, freq );
-
-  if( !is_ready_ ) {
-    logger_->error( "[goertzel_magnitude] generator is not ready!" );
-    return 0.0;
-  }
-
-  return general_goeretzel( signal, signal.size(), double( audio_data_->sample_rate ), freq );
-
-  // number points instead of in-size maybe?
-  int32_t N = int32_t( signal.size() );
-  // double k = ( double( N ) * freq ) / double( audio_data_->sample_rate );
-  // int32_t bin = int32_t( std::round( k ) );
-
-  // double omega = ( 2.0 * std::numbers::pi_v< double > * double( bin ) ) / double( N );
-  double omega = 2.0 * std::numbers::pi_v< double > * freq / double( audio_data_->sample_rate );
-  double cosine = std::cos( omega );
-  double sine = std::sin( omega );
-  double coeff = 2.0 * cosine;
-
-  double window = 0.0;
-  {
-    // rectwin: { 1.0 }
-    // hann: { 0.5, -0.5 }
-    // hamming: { 0.54, -0.46 }
-    // blackman: { 0.42, -0.5, 0.08 }
-    // blackman-harris: { 0.35875, -0.48829, 0.14128, -0.01168 }
-    // nuttall: { 0.3635819, -0.4891775, 0.1365995, -0.0106411 }
-    // nuttall octave: { 0.355768, -0.487396, 0.144232, -0.012604 }
-    // flattop: { 0.21557895, -0.41663158, 0.277263158, -0.083578947, 0.006947368 }
-    // flattop octave: { 1.0 / 4.6402, -1.93 / 4.6402, 1.29 / 4.6402, -0.388 / 4.6402, 0.0322 / 4.6402 }
-    std::vector< double > window_coeffs{ 0.355768, -0.487396, 0.144232, -0.012604 };
-    for( int32_t j = 0; j < window_coeffs.size(); j++ ) {
-      window += window_coeffs[j] * std::cos( double( j ) * omega );
-    }
-  }
-  // double window = 0.0;
-  // { window = 0.5 * ( 1.0 - std::cos( 2.0 * std::numbers::pi_v< double > * freq / double( audio_data_->sample_rate ) ) ); }
-
-  double q0 = 0.0, q1 = 0.0, q2 = 0.0;
-
-  for( int32_t i = 0; i < N; ++i ) {
-    q0 = coeff * q1 - q2 + ( signal[i] );
-    q2 = q1;
-    q1 = q0;
-  }
-
-  double real = q1 - q2 * cosine;
-  double imag = q2 * sine;
-  double ret = std::sqrt( real * real + imag * imag );
-
-  // logger_->trace( "[goertzel_magnitude] exit: ret: {}", ret );
-  return ret;
-}
-
 void CircleVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data ) {
   // logger_->trace( "[draw_samples_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
 
@@ -800,9 +785,7 @@ void CircleVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surface
     std::vector< std::vector< std::pair< double, double > > > paths;
     {
       std::vector< double > dist_mults{ 0.6, 0.7, 0.8, 0.9, 1.0 };
-      double base_radius = height * 0.25;
-      double max_radius = height * 0.5;
-      double radius_range = max_radius - base_radius;
+      double radius_range = FFT_DISPLAY_MAX_RADIUS - FFT_DISPLAY_MIN_RADIUS;
       double x = 0.0;
       double y = 0.0;
 
@@ -810,16 +793,16 @@ void CircleVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surface
         std::vector< std::pair< double, double > > path;
         for( auto it = freq_mags.begin(); it < freq_mags.end(); it++ ) {
           double r = get_radius_mult( it->first, it->second );
-          x = get_x( get_theta( it->first / 2.0 ), base_radius + ( radius_range * r * dist_mult ) );
-          y = get_y( get_theta( it->first / 2.0 ), base_radius + ( radius_range * r * dist_mult ) );
+          x = get_x( get_theta( it->first / 2.0 ), FFT_DISPLAY_MIN_RADIUS + ( radius_range * r * dist_mult ) );
+          y = get_y( get_theta( it->first / 2.0 ), FFT_DISPLAY_MIN_RADIUS + ( radius_range * r * dist_mult ) );
 
           path.emplace_back( x, y );
         }
         // now we should be at the bottom middle
         for( auto it = freq_mags.end() - 1; it >= freq_mags.begin(); it-- ) {
           double r = get_radius_mult( it->first, it->second );
-          x = get_x_mirrored( get_theta( it->first / 2.0 ), base_radius + ( radius_range * r * dist_mult ) );
-          y = get_y( get_theta( it->first / 2.0 ), base_radius + ( radius_range * r * dist_mult ) );
+          x = get_x_mirrored( get_theta( it->first / 2.0 ), FFT_DISPLAY_MIN_RADIUS + ( radius_range * r * dist_mult ) );
+          y = get_y( get_theta( it->first / 2.0 ), FFT_DISPLAY_MIN_RADIUS + ( radius_range * r * dist_mult ) );
 
           path.emplace_back( x, y );
         }
@@ -899,7 +882,7 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
   for( ThreadInputData input_data : inputs ) {
     logger_->trace( "[thread_run] computing input {}", input_data.i );
     std::shared_ptr< cairo_surface_t > frame_surface_to_save = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
-    surface_fill( frame_surface_to_save, 0.0, 0.0, 0.0, 1.0 );
+    surface_fill( frame_surface_to_save, 0.75, 0.5, 0.25, 1.0 );
 
     double epilepsy_warning_alpha = 0.0;
     if( input_data.i < size_t( EPILEPSY_WARNING_VISIBLE_SECONDS * FPS ) ) {
@@ -949,7 +932,6 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
     // double const colour_displace_intensity_scale = 0.15;
 
     std::shared_ptr< cairo_surface_t > copied_bg_surface = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
-    surface_fill( copied_bg_surface, 0.0, 0.0, 0.0, 1.0 );
     std::shared_ptr< cairo_surface_t > dynamic_waves_surface = surface_create_size( dynamic_waves_dest_rect.width, dynamic_waves_dest_rect.height );
     std::shared_ptr< cairo_surface_t > dynamic_freqs_surface = surface_create_size( dynamic_freqs_dest_rect.width, dynamic_freqs_dest_rect.height );
 
@@ -969,23 +951,21 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
                   dynamic_waves_dest_rect.x,
                   dynamic_waves_dest_rect.y,
                   dynamic_waves_dest_rect.width,
-                  dynamic_waves_dest_rect.height,
-                  1.0 );
+                  dynamic_waves_dest_rect.height );
     surface_blit( dynamic_freqs_surface,
                   copied_bg_surface,
                   dynamic_freqs_dest_rect.x,
                   dynamic_freqs_dest_rect.y,
                   dynamic_freqs_dest_rect.width,
-                  dynamic_freqs_dest_rect.height,
-                  1.0 );
+                  dynamic_freqs_dest_rect.height );
     dynamic_freqs_surface.reset();
     dynamic_waves_surface.reset();
 
     surface_shake_and_blit( copied_bg_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ), true );
     copied_bg_surface.reset();
 
-    // // put art on canvas, shakily
-    // surface_shake_and_blit( input_data.project_art_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ) );
+    // put art on canvas, shakily
+    surface_shake_and_blit( input_data.project_art_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ) );
 
     // // put title on canvas, shakily
     // surface_shake_and_blit( input_data.static_text_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ) );

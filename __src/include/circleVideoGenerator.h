@@ -31,6 +31,8 @@ class CircleVideoGenerator {
   static double const FFT_DISPLAY_MAX_FREQ;
   static double const FFT_DISPLAY_MIN_MAG_DB;
   static double const FFT_DISPLAY_MAX_MAG_DB;
+  static double const FFT_DISPLAY_MIN_RADIUS;
+  static double const FFT_DISPLAY_MAX_RADIUS;
 
   private:
   struct AudioData;
@@ -112,7 +114,6 @@ class CircleVideoGenerator {
   static void save_surface( std::shared_ptr< cairo_surface_t > surface, std::filesystem::path const& file_path );
   static void create_lowpass_for_audio_data();
   static void create_epilepsy_warning();
-  static double goertzel_magnitude( std::vector< float > const& signal, double freq );
 
   static void draw_samples_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data );
   static void draw_freqs_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data );
