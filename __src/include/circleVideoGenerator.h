@@ -17,22 +17,28 @@ class CircleVideoGenerator {
   static double const BASS_LP_CUTOFF;
   static double const BASS_HP_CUTOFF;
   static double const PCM_FRAME_COUNT_MULT;
-  // static uint16_t const EXTRA_FFT_SIZE;
-  // static uint16_t const FANCY_EXTRA_FFT_SIZE;
-  // static double const FFT_INPUT_SIZE_MULT;
   static double const EPILEPSY_WARNING_VISIBLE_SECONDS;
   static double const EPILEPSY_WARNING_FADEOUT_SECONDS;
   static uint32_t const FFTW_PLAN_FLAGS;
   static std::string const EPILEPSY_WARNING_HEADER_FONT;
   static std::string const EPILEPSY_WARNING_CONTENT_FONT;
   static double const FFT_COMPUTE_ALPHA;
+  static uint32_t const FFT_POINTCLOUD_POINT_AMOUNT;
+  static double const FFT_POINTCLOUD_MIN_FREQ;
+  static double const FFT_POINTCLOUD_MAX_FREQ;
+  static double const FFT_POINTCLOUD_MAG_DB_RANGE;
   static uint32_t const FFT_DISPLAY_BIN_AMOUNT;
   static double const FFT_DISPLAY_MIN_FREQ;
   static double const FFT_DISPLAY_MAX_FREQ;
-  static double const FFT_DISPLAY_MIN_MAG_DB;
-  static double const FFT_DISPLAY_MAX_MAG_DB;
+  static double const FFT_DISPLAY_MAG_DB_RANGE;
   static double const FFT_DISPLAY_MIN_RADIUS;
   static double const FFT_DISPLAY_MAX_RADIUS;
+
+  private:
+  static double FFT_POINTCLOUD_MAX_MAG_DB;
+  static double FFT_POINTCLOUD_MIN_MAG_DB;
+  static double FFT_DISPLAY_MAX_MAG_DB;
+  static double FFT_DISPLAY_MIN_MAG_DB;
 
   private:
   struct AudioData;

@@ -26,27 +26,6 @@ double const CircleVideoGenerator::BASS_LP_CUTOFF = 80.0;
 double const CircleVideoGenerator::BASS_HP_CUTOFF = 20.0;
 // amount of pcm samples played per frame * this = amount of pcm samples shown per frame
 double const CircleVideoGenerator::PCM_FRAME_COUNT_MULT = CircleVideoGenerator::FPS / 10.0;
-// /*
-//   0 => 1024
-//   1 => 2048
-//   2 => 4096
-//   3 => 8192
-//   4 => 16384
-//   5 => 32768
-// */
-// uint16_t const CircleVideoGenerator::EXTRA_FFT_SIZE = 3;
-// // 2^N times the resolution of the regular fft
-// uint16_t const CircleVideoGenerator::FANCY_EXTRA_FFT_SIZE = 4;
-// /*
-//   to keep 4096 samples:
-//   0 => 4.0
-//   1 => 2.0
-//   2 => 1.0
-//   3 => 0.5
-//   4 => 0.25
-//   5 => 0.125
-// */
-// double const CircleVideoGenerator::FFT_INPUT_SIZE_MULT = 0.5;
 double const CircleVideoGenerator::EPILEPSY_WARNING_VISIBLE_SECONDS = 3.0;
 double const CircleVideoGenerator::EPILEPSY_WARNING_FADEOUT_SECONDS = 2.0;
 // uint32_t const CircleVideoGenerator::FFTW_PLAN_FLAGS = FFTW_EXHAUSTIVE;
@@ -55,23 +34,21 @@ std::string const CircleVideoGenerator::EPILEPSY_WARNING_HEADER_FONT = "BarberCh
 std::string const CircleVideoGenerator::EPILEPSY_WARNING_CONTENT_FONT = "arial_narrow_7.ttf";
 // 0.0 = max smooth, 1.0 = no smooth
 double const CircleVideoGenerator::FFT_COMPUTE_ALPHA = 0.7;
+uint32_t const CircleVideoGenerator::FFT_POINTCLOUD_POINT_AMOUNT = 1024;
+double const CircleVideoGenerator::FFT_POINTCLOUD_MIN_FREQ = 20.0;
+double const CircleVideoGenerator::FFT_POINTCLOUD_MAX_FREQ = 22050.0;
+double const CircleVideoGenerator::FFT_POINTCLOUD_MAG_DB_RANGE = 60.0;
 uint32_t const CircleVideoGenerator::FFT_DISPLAY_BIN_AMOUNT = 512;
 double const CircleVideoGenerator::FFT_DISPLAY_MIN_FREQ = 20.0;
 double const CircleVideoGenerator::FFT_DISPLAY_MAX_FREQ = 200.0;
-// NONE: { 30.0, 71.0 }
-// rectwin: { ???, ??? }
-// hann: { -60.0, -18.0 }
-// hamming: { ???, ??? }
-// blackman: { ???, ??? }
-// blackman-harris: { ???, ??? }
-// nuttall: { -30.0, 3.0 }
-// nuttall octave: { 40.0, 80.0 }
-// flattop: { ???, ??? }
-// flattop octave: { ???, ??? }
-double const CircleVideoGenerator::FFT_DISPLAY_MIN_MAG_DB = -35.0;
-double const CircleVideoGenerator::FFT_DISPLAY_MAX_MAG_DB = -5.0;
+double const CircleVideoGenerator::FFT_DISPLAY_MAG_DB_RANGE = 25.0;
 double const CircleVideoGenerator::FFT_DISPLAY_MIN_RADIUS = 270;
 double const CircleVideoGenerator::FFT_DISPLAY_MAX_RADIUS = 540;
+
+double CircleVideoGenerator::FFT_POINTCLOUD_MAX_MAG_DB = -std::numeric_limits< float >::max();
+double CircleVideoGenerator::FFT_POINTCLOUD_MIN_MAG_DB = std::numeric_limits< float >::max();
+double CircleVideoGenerator::FFT_DISPLAY_MAX_MAG_DB = -std::numeric_limits< float >::max();
+double CircleVideoGenerator::FFT_DISPLAY_MIN_MAG_DB = std::numeric_limits< float >::max();
 
 spdlogger CircleVideoGenerator::logger_ = nullptr;
 bool CircleVideoGenerator::is_ready_ = false;
@@ -308,33 +285,30 @@ void CircleVideoGenerator::prepare_fft() {
     return;
   }
 
-  frame_information_->fft_display_values_per_frame.reserve( frame_information_->amount_output_frames );
-
   uint64_t pcm_frame_count = uint64_t( double( frame_information_->pcm_frames_per_output_frame ) * PCM_FRAME_COUNT_MULT );
-  logger_->trace( "[prepare_fft] pcm_frame_count: {}", pcm_frame_count );
-
   size_t fft_size = 1;
   while( fft_size < pcm_frame_count ) {
     fft_size = fft_size << 1;
   }
-  logger_->trace( "[prepare_fft] fft_size: {}", fft_size );
-
   size_t fft_output_size = fft_size / 2 + 1;
+  logger_->trace( "[prepare_fft] pcm_frame_count: {}", pcm_frame_count );
+  logger_->trace( "[prepare_fft] fft_size: {}", fft_size );
   logger_->trace( "[prepare_fft] fft_output_size: {}", fft_output_size );
 
-  // have vector as input data for fft, so have it fft_size large, but only populate pcm_frame_count data
   std::shared_ptr< double[] > fft_windows = std::make_shared< double[] >( fft_size );
   nuttallwin_octave( fft_windows.get(), fft_size, false );
-
-  // have vector as input data for fft, so have it fft_size large, but only populate pcm_frame_count data
   std::shared_ptr< float[] > signal_data_for_frame = std::make_shared< float[] >( fft_size );
-
-  // fftwf_complex is a float[2], so just have a float vector with double the size
   std::shared_ptr< fftwf_complex[] > fft_output = std::make_shared< fftwf_complex[] >( fft_output_size );
-
   fftwf_plan fft_plan = fftwf_plan_dft_r2c_1d( fft_size, signal_data_for_frame.get(), fft_output.get(), FFTW_PLAN_FLAGS );
 
+  double fft_pointcloud_min_mag_db = std::numeric_limits< float >::max();
+  double fft_pointcloud_max_mag_db = -std::numeric_limits< float >::max();
+  double fft_display_min_mag_db = std::numeric_limits< float >::max();
+  double fft_display_max_mag_db = -std::numeric_limits< float >::max();
+
   double pcm_frame_offset_dbl = 0.0;
+  std::vector< std::vector< std::pair< double, double > > > fft_vals_per_frame;
+  fft_vals_per_frame.reserve( frame_information_->amount_output_frames );
   for( size_t i = 0; i < frame_information_->amount_output_frames; i++ ) {
     // played sample will be in the middle of the shown samples
     int64_t pcm_frame_offset = std::min< int64_t >( audio_data_->total_pcm_frame_count, int64_t( pcm_frame_offset_dbl ) - int64_t( pcm_frame_count / 2 ) );
@@ -367,13 +341,8 @@ void CircleVideoGenerator::prepare_fft() {
 
     fftwf_execute( fft_plan );
 
-    double min_mag_freq = 0.0;
-    double min_mag = std::numeric_limits< float >::max();
-    double max_mag_freq = 0.0;
-    double max_mag = -min_mag;
-
-    std::vector< std::pair< double, double > > fft_display_vals;
-    fft_display_vals.reserve( fft_output_size - 1 );
+    std::vector< std::pair< double, double > > fft_output_vals;
+    fft_output_vals.reserve( fft_output_size - 1 );
 
     for( uint32_t fi = 0; fi < fft_output_size - 1; fi++ ) {
       double freq = double( fi + 1 ) * double( audio_data_->sample_rate ) / double( fft_size );
@@ -385,22 +354,64 @@ void CircleVideoGenerator::prepare_fft() {
       double mag_imag = fft_output[fi + 1][1];
       double mag = std::sqrt( ( mag_real * mag_real ) + ( mag_imag * mag_imag ) ) * mag_compensation / double( fft_size );
       val.second = 20.0 * std::log10( mag + 1e-12 );
-      val.second = std::clamp( val.second, FFT_DISPLAY_MIN_MAG_DB, FFT_DISPLAY_MAX_MAG_DB );
-      fft_display_vals.push_back( val );
+      fft_output_vals.push_back( val );
 
-      if( ( val.second ) < min_mag ) {
-        min_mag_freq = val.first;
-        min_mag = val.second;
+      if( ( FFT_DISPLAY_MIN_FREQ <= val.first ) && ( val.first <= FFT_DISPLAY_MAX_FREQ ) ) {
+        fft_display_min_mag_db = std::min( val.second, fft_display_min_mag_db );
+        fft_display_max_mag_db = std::max( val.second, fft_display_max_mag_db );
       }
-      if( ( val.second ) > max_mag ) {
-        max_mag_freq = val.first;
-        max_mag = val.second;
+      if( ( FFT_POINTCLOUD_MIN_FREQ <= val.first ) && ( val.first <= FFT_POINTCLOUD_MAX_FREQ ) ) {
+        fft_pointcloud_min_mag_db = std::min( val.second, fft_pointcloud_min_mag_db );
+        fft_pointcloud_max_mag_db = std::max( val.second, fft_pointcloud_max_mag_db );
       }
     }
+    fft_vals_per_frame.push_back( fft_output_vals );
 
+    pcm_frame_offset_dbl += frame_information_->pcm_frames_per_output_frame;
+  }
+
+  FFT_POINTCLOUD_MAX_MAG_DB = std::ceil( fft_pointcloud_max_mag_db );
+  FFT_POINTCLOUD_MIN_MAG_DB = FFT_POINTCLOUD_MAX_MAG_DB - FFT_POINTCLOUD_MAG_DB_RANGE;
+  FFT_DISPLAY_MAX_MAG_DB = std::ceil( fft_display_max_mag_db );
+  FFT_DISPLAY_MIN_MAG_DB = FFT_DISPLAY_MAX_MAG_DB - FFT_DISPLAY_MAG_DB_RANGE;
+  logger_->trace( "[prepare_fft] FFT_POINTCLOUD_MAX_MAG_DB: {}", FFT_POINTCLOUD_MAX_MAG_DB );
+  logger_->trace( "[prepare_fft] FFT_POINTCLOUD_MIN_MAG_DB: {}", FFT_POINTCLOUD_MIN_MAG_DB );
+  logger_->trace( "[prepare_fft] FFT_DISPLAY_MAX_MAG_DB: {}", FFT_DISPLAY_MAX_MAG_DB );
+  logger_->trace( "[prepare_fft] FFT_DISPLAY_MIN_MAG_DB: {}", FFT_DISPLAY_MIN_MAG_DB );
+
+  std::vector< std::vector< std::pair< double, double > > > fft_display_vals_per_frame;
+  fft_display_vals_per_frame.reserve( fft_vals_per_frame.size() );
+  for( std::vector< std::pair< double, double > > fft_vals : fft_vals_per_frame ) {
+    std::vector< std::pair< double, double > > fft_display_vals;
+    fft_display_vals.reserve( fft_vals.size() );
+    for( std::pair< double, double > pair : fft_vals ) {
+      std::pair< double, double > val;
+      val.first = pair.first;
+      val.second = std::clamp( pair.second, FFT_DISPLAY_MIN_MAG_DB, FFT_DISPLAY_MAX_MAG_DB );
+      fft_display_vals.push_back( val );
+    }
+    fft_display_vals_per_frame.push_back( fft_display_vals );
+  }
+
+  std::vector< std::vector< std::pair< double, double > > > fft_pointcloud_vals_per_frame;
+  fft_pointcloud_vals_per_frame.reserve( fft_vals_per_frame.size() );
+  for( std::vector< std::pair< double, double > > fft_vals : fft_vals_per_frame ) {
+    std::vector< std::pair< double, double > > fft_pointcloud_vals;
+    fft_pointcloud_vals.reserve( fft_vals.size() );
+    for( std::pair< double, double > pair : fft_vals ) {
+      std::pair< double, double > val;
+      val.first = pair.first;
+      val.second = std::clamp( pair.second, FFT_POINTCLOUD_MIN_MAG_DB, FFT_POINTCLOUD_MAX_MAG_DB );
+      fft_pointcloud_vals.push_back( val );
+    }
+    fft_pointcloud_vals_per_frame.push_back( fft_pointcloud_vals );
+  }
+
+  frame_information_->fft_display_values_per_frame.reserve( fft_display_vals_per_frame.size() );
+  for( std::vector< std::pair< double, double > > fft_display_vals : fft_display_vals_per_frame ) {
     std::shared_ptr< std::vector< std::pair< double, double > > > formatted_fft_display_values
         = std::make_shared< std::vector< std::pair< double, double > > >();
-    formatted_fft_display_values->reserve( fft_output_size - 1 );
+    formatted_fft_display_values->reserve( FFT_DISPLAY_BIN_AMOUNT );
 
     for( uint32_t bin = 0; bin < FFT_DISPLAY_BIN_AMOUNT; bin++ ) {
       double relative_freq = double( bin ) / double( FFT_DISPLAY_BIN_AMOUNT - 1 );
@@ -424,15 +435,7 @@ void CircleVideoGenerator::prepare_fft() {
       formatted_fft_display_values->push_back( val );
     }
 
-    logger_->debug( "[prepare_threads] output frame {} has compensated fft vals (min_mag: {} dB at {} Hz, max_mag: {} dB at {} Hz)",
-                    i,
-                    min_mag,
-                    min_mag_freq,
-                    max_mag,
-                    max_mag_freq );
     frame_information_->fft_display_values_per_frame.push_back( formatted_fft_display_values );
-
-    pcm_frame_offset_dbl += frame_information_->pcm_frames_per_output_frame;
   }
 
   logger_->trace( "[prepare_fft] exit" );
@@ -881,7 +884,7 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
   dynamic_freqs_dest_rect.height = VIDEO_HEIGHT;
 
   for( ThreadInputData input_data : inputs ) {
-    logger_->trace( "[thread_run] computing input {}", input_data.i );
+    // logger_->trace( "[thread_run] computing input {}", input_data.i );
     std::shared_ptr< cairo_surface_t > frame_surface_to_save = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
     surface_fill( frame_surface_to_save, 0.75, 0.5, 0.25, 1.0 );
 
@@ -971,8 +974,8 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
     // // put title on canvas, shakily
     // surface_shake_and_blit( input_data.static_text_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ) );
 
-    // put warning on top, with alpha
-    surface_blit( input_data.common_epilepsy_warning_surface, frame_surface_to_save, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, epilepsy_warning_alpha );
+    // // put warning on top, with alpha
+    // surface_blit( input_data.common_epilepsy_warning_surface, frame_surface_to_save, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, epilepsy_warning_alpha );
 
     // save canvas
     save_surface( frame_surface_to_save, input_data.project_temp_pictureset_picture_path );
