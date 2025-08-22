@@ -4,6 +4,7 @@
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <random>
 
 #include "_dr_wav.h"
 #include "_fftw.h"
@@ -35,8 +36,6 @@ std::string const CircleVideoGenerator::EPILEPSY_WARNING_CONTENT_FONT = "arial_n
 // 0.0 = max smooth, 1.0 = no smooth
 double const CircleVideoGenerator::FFT_COMPUTE_ALPHA = 0.7;
 uint32_t const CircleVideoGenerator::FFT_POINTCLOUD_POINT_AMOUNT = 1024;
-double const CircleVideoGenerator::FFT_POINTCLOUD_MIN_FREQ = 20.0;
-double const CircleVideoGenerator::FFT_POINTCLOUD_MAX_FREQ = 22050.0;
 double const CircleVideoGenerator::FFT_POINTCLOUD_MAG_DB_RANGE = 60.0;
 uint32_t const CircleVideoGenerator::FFT_DISPLAY_BIN_AMOUNT = 512;
 double const CircleVideoGenerator::FFT_DISPLAY_MIN_FREQ = 20.0;
@@ -45,10 +44,16 @@ double const CircleVideoGenerator::FFT_DISPLAY_MAG_DB_RANGE = 25.0;
 double const CircleVideoGenerator::FFT_DISPLAY_MIN_RADIUS = 270;
 double const CircleVideoGenerator::FFT_DISPLAY_MAX_RADIUS = 540;
 
+double CircleVideoGenerator::FFT_POINTCLOUD_MIN_FREQ = 20.0;
+double CircleVideoGenerator::FFT_POINTCLOUD_MAX_FREQ = 22050.0;
 double CircleVideoGenerator::FFT_POINTCLOUD_MAX_MAG_DB = -std::numeric_limits< float >::max();
 double CircleVideoGenerator::FFT_POINTCLOUD_MIN_MAG_DB = std::numeric_limits< float >::max();
 double CircleVideoGenerator::FFT_DISPLAY_MAX_MAG_DB = -std::numeric_limits< float >::max();
 double CircleVideoGenerator::FFT_DISPLAY_MIN_MAG_DB = std::numeric_limits< float >::max();
+
+double CircleVideoGenerator::Point::base_speed_x = CircleVideoGenerator::VIDEO_WIDTH / 5.0;
+double CircleVideoGenerator::Point::base_speed_y = CircleVideoGenerator::VIDEO_HEIGHT / 200.0;
+double CircleVideoGenerator::Point::base_radius = CircleVideoGenerator::VIDEO_HEIGHT / 200.0;
 
 spdlogger CircleVideoGenerator::logger_ = nullptr;
 bool CircleVideoGenerator::is_ready_ = false;
@@ -76,7 +81,7 @@ void CircleVideoGenerator::init( std::filesystem::path const& project_path, std:
   common_path_ = common_path;
 
   common_epilepsy_warning_path_ = common_path_ / "epileptic_warning.txt";
-  common_bg_path_ = common_path_ / "bg.old.png";
+  common_bg_path_ = common_path_ / "bg.art.png";
   common_circle_path_ = common_path_ / "circle.png";
   project_art_path_ = project_path_ / "art.png";
   project_audio_path_ = project_path_ / "audio.wav";
@@ -285,6 +290,8 @@ void CircleVideoGenerator::prepare_fft() {
     return;
   }
 
+#pragma region init fft vals
+
   uint64_t pcm_frame_count = uint64_t( double( frame_information_->pcm_frames_per_output_frame ) * PCM_FRAME_COUNT_MULT );
   size_t fft_size = 1;
   while( fft_size < pcm_frame_count ) {
@@ -305,6 +312,10 @@ void CircleVideoGenerator::prepare_fft() {
   double fft_pointcloud_max_mag_db = -std::numeric_limits< float >::max();
   double fft_display_min_mag_db = std::numeric_limits< float >::max();
   double fft_display_max_mag_db = -std::numeric_limits< float >::max();
+
+#pragma endregion init fft vals
+
+#pragma region compute fft
 
   double pcm_frame_offset_dbl = 0.0;
   std::vector< std::vector< std::pair< double, double > > > fft_vals_per_frame;
@@ -370,6 +381,11 @@ void CircleVideoGenerator::prepare_fft() {
     pcm_frame_offset_dbl += frame_information_->pcm_frames_per_output_frame;
   }
 
+#pragma endregion compute fft
+
+#pragma region min/max mag
+
+  FFT_POINTCLOUD_MAX_FREQ = double( audio_data_->sample_rate ) / 2.0;
   FFT_POINTCLOUD_MAX_MAG_DB = std::ceil( fft_pointcloud_max_mag_db );
   FFT_POINTCLOUD_MIN_MAG_DB = FFT_POINTCLOUD_MAX_MAG_DB - FFT_POINTCLOUD_MAG_DB_RANGE;
   FFT_DISPLAY_MAX_MAG_DB = std::ceil( fft_display_max_mag_db );
@@ -378,6 +394,10 @@ void CircleVideoGenerator::prepare_fft() {
   logger_->trace( "[prepare_fft] FFT_POINTCLOUD_MIN_MAG_DB: {}", FFT_POINTCLOUD_MIN_MAG_DB );
   logger_->trace( "[prepare_fft] FFT_DISPLAY_MAX_MAG_DB: {}", FFT_DISPLAY_MAX_MAG_DB );
   logger_->trace( "[prepare_fft] FFT_DISPLAY_MIN_MAG_DB: {}", FFT_DISPLAY_MIN_MAG_DB );
+
+#pragma endregion min / max mag
+
+#pragma region clamp fft display vals
 
   std::vector< std::vector< std::pair< double, double > > > fft_display_vals_per_frame;
   fft_display_vals_per_frame.reserve( fft_vals_per_frame.size() );
@@ -393,6 +413,10 @@ void CircleVideoGenerator::prepare_fft() {
     fft_display_vals_per_frame.push_back( fft_display_vals );
   }
 
+#pragma endregion clamp fft display vals
+
+#pragma region clamp fft pointcloud vals
+
   std::vector< std::vector< std::pair< double, double > > > fft_pointcloud_vals_per_frame;
   fft_pointcloud_vals_per_frame.reserve( fft_vals_per_frame.size() );
   for( std::vector< std::pair< double, double > > fft_vals : fft_vals_per_frame ) {
@@ -406,6 +430,10 @@ void CircleVideoGenerator::prepare_fft() {
     }
     fft_pointcloud_vals_per_frame.push_back( fft_pointcloud_vals );
   }
+
+#pragma endregion clamp fft pointcloud vals
+
+#pragma region compute display vals
 
   frame_information_->fft_display_values_per_frame.reserve( fft_display_vals_per_frame.size() );
   for( std::vector< std::pair< double, double > > fft_display_vals : fft_display_vals_per_frame ) {
@@ -437,6 +465,90 @@ void CircleVideoGenerator::prepare_fft() {
 
     frame_information_->fft_display_values_per_frame.push_back( formatted_fft_display_values );
   }
+
+#pragma endregion compute display vals
+
+#pragma region init pointcloud vec
+
+  double fft_pointcloud_starting_x = 0.0 - CircleVideoGenerator::Point::base_radius;
+  double fft_pointcloud_ending_x = double( VIDEO_WIDTH ) + CircleVideoGenerator::Point::base_radius;
+  double fft_pointcloud_starting_y = 0.0 - CircleVideoGenerator::Point::base_radius;
+  double fft_pointcloud_ending_y = double( VIDEO_HEIGHT ) + CircleVideoGenerator::Point::base_radius;
+  std::vector< Point > pointcloud_vec;
+  pointcloud_vec.reserve( FFT_POINTCLOUD_POINT_AMOUNT );
+  {
+    std::random_device random_device;
+    std::default_random_engine random_engine( random_device() );
+    std::uniform_real_distribution< double > width_dist( fft_pointcloud_starting_x, fft_pointcloud_ending_x );
+    std::uniform_real_distribution< double > height_dist( fft_pointcloud_starting_y, fft_pointcloud_ending_y );
+    std::uniform_real_distribution< double > depth_dist( 0.0, 1.0 );
+    std::uniform_real_distribution< double > y_speed_dist( -1.0, 1.0 );
+    for( uint32_t i = 0; i < FFT_POINTCLOUD_POINT_AMOUNT; i++ ) {
+      Point point;
+
+      point.x = width_dist( random_engine );
+      point.y = height_dist( random_engine );
+
+      // since `norm_freq_log` is `(std::log(freq) - std::log(min_freq)) / (std::log(max_freq) - std::log(min_freq))`
+      // to get `freq` from a random `norm_freq_log`, it would be `std::exp((norm_freq_log * (std::log(max_freq) - std::log(min_freq))) + std::log(min_freq))`
+      double norm_freq_log = depth_dist( random_engine );
+      point.z
+          = std::exp( ( norm_freq_log * ( std::log( FFT_POINTCLOUD_MAX_FREQ ) - std::log( FFT_POINTCLOUD_MIN_FREQ ) ) ) + std::log( FFT_POINTCLOUD_MIN_FREQ ) );
+      point.radius = std::lerp( 1.0, point.base_radius, norm_freq_log );
+      point.speed_x = 0.0;
+      point.speed_y = CircleVideoGenerator::Point::base_speed_y * y_speed_dist( random_engine );
+
+      pointcloud_vec.push_back( point );
+    }
+  }
+
+#pragma endregion init pointcloud vec
+
+#pragma region compute pointcloud vals
+
+  frame_information_->fft_pointcloud_values_per_frame.reserve( fft_pointcloud_vals_per_frame.size() );
+  for( std::vector< std::pair< double, double > > fft_pointcloud_vals : fft_pointcloud_vals_per_frame ) {
+    for( uint32_t p_i = 0; p_i < pointcloud_vec.size(); p_i++ ) {
+      CircleVideoGenerator::Point& point = pointcloud_vec[p_i];
+      double freq = point.z;
+      double fft_freq_bin = ( double( fft_size ) * freq / audio_data_->sample_rate ) - 1.0;  // -1 because we skipped the first index earlier
+
+      int64_t a_index = int64_t( std::floor( fft_freq_bin ) );
+      int64_t b_index = int64_t( std::ceil( fft_freq_bin ) );
+      double t = fft_freq_bin - double( a_index );
+
+      // double mag_db_val = std::lerp( fft_pointcloud_vals[a_index].second, fft_pointcloud_vals[b_index].second, t );
+      double mag_db_val
+          = catmullRom( fft_pointcloud_vals[a_index - 1], fft_pointcloud_vals[a_index], fft_pointcloud_vals[b_index], fft_pointcloud_vals[b_index + 1], t )
+                .second;
+      double norm_mag_db = ( mag_db_val - FFT_POINTCLOUD_MIN_MAG_DB ) / ( FFT_POINTCLOUD_MAX_MAG_DB - FFT_POINTCLOUD_MIN_MAG_DB );
+      norm_mag_db = std::clamp( norm_mag_db, 0.0, 1.0 );
+      double point_speed = std::lerp( CircleVideoGenerator::Point::base_speed_x * 0.0625, CircleVideoGenerator::Point::base_speed_x, norm_mag_db );
+
+      // apply smoothing
+      point.speed_x = ( FFT_COMPUTE_ALPHA * point_speed ) + ( ( 1.0 - FFT_COMPUTE_ALPHA ) * point.speed_x );
+
+      point.x += point.speed_x / FPS;
+      point.y += point.speed_y / FPS;
+
+      if( point.x < fft_pointcloud_starting_x ) {
+        point.x = fft_pointcloud_ending_x;
+      }
+      if( point.x > fft_pointcloud_ending_x ) {
+        point.x = fft_pointcloud_starting_x;
+      }
+      if( point.y < fft_pointcloud_starting_y ) {
+        point.y = fft_pointcloud_ending_y;
+      }
+      if( point.y > fft_pointcloud_ending_y ) {
+        point.y = fft_pointcloud_starting_y;
+      }
+    }
+
+    frame_information_->fft_pointcloud_values_per_frame.push_back( std::make_shared< std::vector< Point > >( pointcloud_vec ) );
+  }
+
+#pragma endregion compute pointcloud vals
 
   logger_->trace( "[prepare_fft] exit" );
 }
@@ -474,6 +586,7 @@ void CircleVideoGenerator::prepare_threads() {
     input_data.common_circle_surface = frame_information_->common_circle_surface;
     input_data.project_art_surface = frame_information_->project_art_surface;
     input_data.static_text_surface = frame_information_->static_text_surface;
+    input_data.fft_pointcloud_values = frame_information_->fft_pointcloud_values_per_frame[i];
     input_data.fft_display_values = frame_information_->fft_display_values_per_frame[i];
     // logger_->debug( "[prepare_threads] output frame {} from sample {} to {}",
     //                 input_data.i,
@@ -654,75 +767,39 @@ void CircleVideoGenerator::create_epilepsy_warning() {
   logger_->trace( "[create_epilepsy_warning] exit" );
 }
 
-void CircleVideoGenerator::draw_point_cloud_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data ) {
-  // logger_->trace( "[draw_point_cloud_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
+void CircleVideoGenerator::draw_pointcloud_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data ) {
+  // logger_->trace( "[draw_pointcloud_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
 
   if( !is_ready_ ) {
-    logger_->error( "[draw_point_cloud_on_surface] generator is not ready!" );
+    logger_->error( "[draw_pointcloud_on_surface] generator is not ready!" );
     return;
   }
 
-  // logger_->trace( "[draw_point_cloud_on_surface] exit" );
-  return;
-
-  /*
   // surface_fill( surface, 0.0, 0.0, 0.0, 0.0 );
 
   cairo_t* cr = cairo_create( surface.get() );
   cairo_save( cr );
 
-  double const surface_w = cairo_image_surface_get_width( surface.get() );
-  double const surface_h = cairo_image_surface_get_height( surface.get() );
+  for( uint32_t i = 0; i < input_data.fft_pointcloud_values->size(); i++ ) {
+    CircleVideoGenerator::Point& point = input_data.fft_pointcloud_values->at( i );
 
-  double const middle_y = surface_h / 2.0;
-  double const frame_duration = static_cast< double >( input_data.pcm_frame_count );
-  double prev_x = 0.0;
-  double prev_y = middle_y;
-  double x = 0.0;
-  double y = middle_y;
-  // logger->debug( "draw_point_cloud_on_surface - {} frames for {} pixels", frame_duration, surface_w );
+    std::shared_ptr< cairo_pattern_t > circle_pattern
+        = make_pattern_shared_ptr( cairo_pattern_create_radial( point.x, point.y, 0.0, point.x, point.y, point.radius ) );
+    cairo_pattern_add_color_stop_rgba( circle_pattern.get(), 0.0, 1.0, 1.0, 1.0, 0.5 );
+    cairo_pattern_add_color_stop_rgba( circle_pattern.get(), 0.5, 1.0, 1.0, 1.0, 0.5 );
+    cairo_pattern_add_color_stop_rgba( circle_pattern.get(), 1.0, 1.0, 1.0, 1.0, 0.0 );
+    cairo_set_source( cr, circle_pattern.get() );
 
-  cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
-  // default is 2.0
-  cairo_set_line_width( cr, 3.0 );
-
-  for( int c = audio_data_->channels - 1; c >= 0; c-- ) {
-    prev_x = 0.0;
-    prev_y = middle_y;
-
-    double red = std::pow( 0.5, static_cast< double >( c ) );
-    cairo_set_source_rgb( cr, red, 0.0, 0.0 );
-
-    for( int64_t i = 0; i < input_data.pcm_frame_count; i++ ) {
-      x = std::round( static_cast< float >( surface_w ) * ( static_cast< float >( i ) / static_cast< float >( frame_duration - 1 ) ) );
-
-      // range: -1.0 to 1.0
-      float sample = 0.0;
-      int64_t sample_index = ( ( input_data.pcm_frame_offset + i ) * audio_data_->channels ) + c;
-      if( ( sample_index >= 0 ) && ( sample_index < ( audio_data_->total_pcm_frame_count * audio_data_->channels ) ) ) {
-        sample = audio_data_->sample_data[sample_index];
-      }
-
-      y = std::round( static_cast< double >( middle_y ) + ( static_cast< double >( middle_y ) * sample ) );
-
-      if( i == 0 ) {
-        prev_x = x;
-        prev_y = y;
-      }
-      cairo_move_to( cr, prev_x, prev_y );
-      cairo_line_to( cr, x, y );
-
-      prev_x = x;
-      prev_y = y;
-    }
-    cairo_stroke( cr );
+    cairo_arc( cr, point.x, point.y, point.radius, 0.0, 2.0 * std::numbers::pi_v< double > );
+    cairo_clip( cr );
+    cairo_paint( cr );
+    cairo_reset_clip( cr );
   }
 
   cairo_restore( cr );
   cairo_destroy( cr );
 
-  logger_->trace( "[draw_point_cloud_on_surface] exit" );
-  */
+  // logger_->trace( "[draw_pointcloud_on_surface] exit" );
 }
 
 void CircleVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surface_t > surface, CircleVideoGenerator::ThreadInputData const& input_data ) {
@@ -756,10 +833,10 @@ void CircleVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surface
     // } else {
     //   mult = std::lerp( 0.75, 0.25, ( norm - double( 3.0 / 4.0 ) ) * double( 4.0 / 1.0 ) );
     // }
-    double a = -16. / 3.;
-    double b = 40. / 3.;
-    double c = -41. / 3.;
-    double d = 17. / 3.;
+    double a = -80. / 3.;
+    double b = 184. / 3.;
+    double c = -145. / 3.;
+    double d = 41. / 3.;
     double e = 0.25;
     mult = ( a * std::pow( norm, 4.0 ) ) + ( b * std::pow( norm, 3.0 ) ) + ( c * std::pow( norm, 2.0 ) ) + ( d * std::pow( norm, 1.0 ) )
            + ( e * std::pow( norm, 0.0 ) );
@@ -871,13 +948,13 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
     return;
   }
 
-  cairo_rectangle_t dynamic_waves_dest_rect;
+  cairo_rectangle_t dynamic_pointcloud_dest_rect;
   cairo_rectangle_t dynamic_freqs_dest_rect;
 
-  dynamic_waves_dest_rect.x = 0;
-  dynamic_waves_dest_rect.y = 0;
-  dynamic_waves_dest_rect.width = VIDEO_WIDTH;
-  dynamic_waves_dest_rect.height = VIDEO_HEIGHT;
+  dynamic_pointcloud_dest_rect.x = 0;
+  dynamic_pointcloud_dest_rect.y = 0;
+  dynamic_pointcloud_dest_rect.width = VIDEO_WIDTH;
+  dynamic_pointcloud_dest_rect.height = VIDEO_HEIGHT;
   dynamic_freqs_dest_rect.x = 0;
   dynamic_freqs_dest_rect.y = 0;
   dynamic_freqs_dest_rect.width = VIDEO_WIDTH;
@@ -886,7 +963,7 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
   for( ThreadInputData input_data : inputs ) {
     // logger_->trace( "[thread_run] computing input {}", input_data.i );
     std::shared_ptr< cairo_surface_t > frame_surface_to_save = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
-    surface_fill( frame_surface_to_save, 0.75, 0.5, 0.25, 1.0 );
+    // surface_fill( frame_surface_to_save, 0.0, 0.0, 0.0, 1.0 );
 
     double epilepsy_warning_alpha = 0.0;
     if( input_data.i < size_t( EPILEPSY_WARNING_VISIBLE_SECONDS * FPS ) ) {
@@ -898,35 +975,28 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
       epilepsy_warning_alpha = std::clamp( epilepsy_warning_alpha, 0.0, 1.0 );
     }
 
-    // range: 0.0 - 1.0
-    float min_bass_sample_value = 0.0;
-    float max_bass_sample_value = 0.0;
-    float min_sound_sample_value = 0.0;
-    float max_sound_sample_value = 0.0;
+    double bass_rms_sum_value = 0.0;
+    double rms_sum_value = 0.0;
     for( int64_t i = 0; i <= input_data.pcm_frame_count; i++ ) {
       for( int64_t c = 0; c <= input_data.audio_data_ptr->channels; c++ ) {
         int64_t sample_index = ( ( input_data.pcm_frame_offset + i ) * input_data.audio_data_ptr->channels ) + c;
-        float bass_sample = 0.0;
-        float sound_sample = 0.0;
+        double bass_sample = 0.0;
+        double sound_sample = 0.0;
         if( ( sample_index >= 0 ) && ( sample_index < ( input_data.audio_data_ptr->total_pcm_frame_count * input_data.audio_data_ptr->channels ) ) ) {
           bass_sample = input_data.audio_data_ptr->processed_sample_data[sample_index];
           sound_sample = input_data.audio_data_ptr->sample_data[sample_index];
         }
-        bass_sample = std::clamp( bass_sample, -1.0f, 1.0f );
-        sound_sample = std::clamp( sound_sample, -1.0f, 1.0f );
-        min_bass_sample_value = std::min( min_bass_sample_value, bass_sample );
-        max_bass_sample_value = std::max( max_bass_sample_value, bass_sample );
-        min_sound_sample_value = std::min( min_sound_sample_value, sound_sample );
-        max_sound_sample_value = std::max( max_sound_sample_value, sound_sample );
+        bass_sample = std::clamp( bass_sample, -1.0, 1.0 );
+        sound_sample = std::clamp( sound_sample, -1.0, 1.0 );
+
+        bass_rms_sum_value += std::pow( bass_sample, 2.0 );
+        rms_sum_value += std::pow( sound_sample, 2.0 );
       }
     }
 
-    double const bass_intensity = ( ( std::abs( min_bass_sample_value ) / std::abs( input_data.audio_data_ptr->processed_sample_min ) )
-                                    + ( std::abs( max_bass_sample_value ) / std::abs( input_data.audio_data_ptr->processed_sample_max ) ) )
-                                  / 2.0f;
-    double const sound_intensity = ( ( std::abs( min_sound_sample_value ) / std::abs( input_data.audio_data_ptr->sample_min ) )
-                                     + ( std::abs( max_sound_sample_value ) / std::abs( input_data.audio_data_ptr->sample_max ) ) )
-                                   / 2.0f;
+    double const bass_intensity = std::sqrt( bass_rms_sum_value / (static_cast< double >( static_cast< double >( input_data.pcm_frame_count ) ) * static_cast< double >( input_data.pcm_frame_count )) );
+    double const sound_intensity = std::sqrt( rms_sum_value / (static_cast< double >( static_cast< double >( input_data.pcm_frame_count ) ) * static_cast< double >( input_data.pcm_frame_count )) );
+    double const bg_intensity_scale = 0.5;
     double const circle_intensity_scale = 0.5;
     double const colour_displace_intensity_scale = 0.15;
 
@@ -935,14 +1005,14 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
     // double const circle_intensity_scale = 0.5;
     // double const colour_displace_intensity_scale = 0.15;
 
-    std::shared_ptr< cairo_surface_t > dynamic_freq_response_surface = surface_create_size( VIDEO_WIDTH, VIDEO_HEIGHT );
-    std::shared_ptr< cairo_surface_t > dynamic_point_cloud_surface = surface_create_size( dynamic_waves_dest_rect.width, dynamic_waves_dest_rect.height );
+    std::shared_ptr< cairo_surface_t > dynamic_pointcloud_surface
+        = surface_create_size( dynamic_pointcloud_dest_rect.width, dynamic_pointcloud_dest_rect.height );
     std::shared_ptr< cairo_surface_t > dynamic_freqs_surface = surface_create_size( dynamic_freqs_dest_rect.width, dynamic_freqs_dest_rect.height );
 
     try {
-      draw_point_cloud_on_surface( dynamic_point_cloud_surface, input_data );
+      draw_pointcloud_on_surface( dynamic_pointcloud_surface, input_data );
     } catch( std::exception const& e ) {
-      logger_->error( "[thread_run] error in draw_point_cloud_on_surface: {}", e.what() );
+      logger_->error( "[thread_run] error in draw_pointcloud_on_surface: {}", e.what() );
     }
     try {
       draw_freqs_on_surface( dynamic_freqs_surface, input_data );
@@ -950,23 +1020,19 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
       logger_->error( "[thread_run] error in draw_freqs_on_surface: {}", e.what() );
     }
 
-    surface_blit( dynamic_point_cloud_surface,
-                  dynamic_freq_response_surface,
-                  dynamic_waves_dest_rect.x,
-                  dynamic_waves_dest_rect.y,
-                  dynamic_waves_dest_rect.width,
-                  dynamic_waves_dest_rect.height );
-    surface_blit( dynamic_freqs_surface,
-                  dynamic_freq_response_surface,
-                  dynamic_freqs_dest_rect.x,
-                  dynamic_freqs_dest_rect.y,
-                  dynamic_freqs_dest_rect.width,
-                  dynamic_freqs_dest_rect.height );
-    dynamic_freqs_surface.reset();
-    dynamic_point_cloud_surface.reset();
+    // put bg art on canvas, shakily
+    surface_shake_and_blit( input_data.common_bg_surface, frame_surface_to_save, ( bg_intensity_scale * colour_displace_intensity_scale * bass_intensity ) );
 
-    surface_shake_and_blit( dynamic_freq_response_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ), true );
-    dynamic_freq_response_surface.reset();
+    surface_blit( dynamic_pointcloud_surface,
+                  frame_surface_to_save,
+                  dynamic_pointcloud_dest_rect.x,
+                  dynamic_pointcloud_dest_rect.y,
+                  dynamic_pointcloud_dest_rect.width,
+                  dynamic_pointcloud_dest_rect.height );
+    dynamic_pointcloud_surface.reset();
+
+    surface_shake_and_blit( dynamic_freqs_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ), true );
+    dynamic_freqs_surface.reset();
 
     // put art on canvas, shakily
     surface_shake_and_blit( input_data.project_art_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ) );
@@ -974,8 +1040,8 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
     // // put title on canvas, shakily
     // surface_shake_and_blit( input_data.static_text_surface, frame_surface_to_save, ( colour_displace_intensity_scale * bass_intensity ) );
 
-    // // put warning on top, with alpha
-    // surface_blit( input_data.common_epilepsy_warning_surface, frame_surface_to_save, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, epilepsy_warning_alpha );
+    // put warning on top, with alpha
+    surface_blit( input_data.common_epilepsy_warning_surface, frame_surface_to_save, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT, epilepsy_warning_alpha );
 
     // save canvas
     save_surface( frame_surface_to_save, input_data.project_temp_pictureset_picture_path );
