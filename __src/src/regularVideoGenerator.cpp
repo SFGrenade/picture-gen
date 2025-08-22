@@ -662,41 +662,32 @@ void RegularVideoGenerator::thread_run( std::vector< RegularVideoGenerator::Thre
       epilepsy_warning_alpha = std::clamp( epilepsy_warning_alpha, 0.0, 1.0 );
     }
 
-    // range: 0.0 - 1.0
-    float min_bass_sample_value = 0.0;
-    float max_bass_sample_value = 0.0;
-    float min_sound_sample_value = 0.0;
-    float max_sound_sample_value = 0.0;
+    double bass_rms_sum_value = 0.0;
+    double rms_sum_value = 0.0;
     for( int64_t i = 0; i <= input_data.pcm_frame_count; i++ ) {
       for( int64_t c = 0; c <= input_data.audio_data_ptr->channels; c++ ) {
         int64_t sample_index = ( ( input_data.pcm_frame_offset + i ) * input_data.audio_data_ptr->channels ) + c;
-        float bass_sample = 0.0;
-        float sound_sample = 0.0;
+        double bass_sample = 0.0;
+        double sound_sample = 0.0;
         if( ( sample_index >= 0 ) && ( sample_index < ( input_data.audio_data_ptr->total_pcm_frame_count * input_data.audio_data_ptr->channels ) ) ) {
           bass_sample = input_data.audio_data_ptr->processed_sample_data[sample_index];
           sound_sample = input_data.audio_data_ptr->sample_data[sample_index];
         }
-        bass_sample = std::clamp( bass_sample, -1.0f, 1.0f );
-        sound_sample = std::clamp( sound_sample, -1.0f, 1.0f );
-        min_bass_sample_value = std::min( min_bass_sample_value, bass_sample );
-        max_bass_sample_value = std::max( max_bass_sample_value, bass_sample );
-        min_sound_sample_value = std::min( min_sound_sample_value, sound_sample );
-        max_sound_sample_value = std::max( max_sound_sample_value, sound_sample );
+        bass_sample = std::clamp( bass_sample, -1.0, 1.0 );
+        sound_sample = std::clamp( sound_sample, -1.0, 1.0 );
+
+        bass_rms_sum_value += std::pow( bass_sample, 2.0 );
+        rms_sum_value += std::pow( sound_sample, 2.0 );
       }
     }
 
-    double const bass_intensity = ( ( std::abs( min_bass_sample_value ) / std::abs( input_data.audio_data_ptr->processed_sample_min ) )
-                                    + ( std::abs( max_bass_sample_value ) / std::abs( input_data.audio_data_ptr->processed_sample_max ) ) )
-                                  / 2.0f;
-    double const sound_intensity = ( ( std::abs( min_sound_sample_value ) / std::abs( input_data.audio_data_ptr->sample_min ) )
-                                     + ( std::abs( max_sound_sample_value ) / std::abs( input_data.audio_data_ptr->sample_max ) ) )
-                                   / 2.0f;
+    double const bass_intensity = std::sqrt( bass_rms_sum_value / (static_cast< double >( static_cast< double >( input_data.pcm_frame_count ) ) * static_cast< double >( input_data.pcm_frame_count )) );
+    double const sound_intensity = std::sqrt( rms_sum_value / (static_cast< double >( static_cast< double >( input_data.pcm_frame_count ) ) * static_cast< double >( input_data.pcm_frame_count )) );
     double const circle_intensity_scale = 0.5;
     double const colour_displace_intensity_scale = 0.15;
 
-    project_common_circle_dest_rect.width
-        = double( cairo_image_surface_get_width( input_data.common_circle_surface.get() ) )
-          * ( ( 1.0 - circle_intensity_scale ) + ( ( ( bass_intensity + sound_intensity ) / 2.0 ) * circle_intensity_scale ) );
+    project_common_circle_dest_rect.width = double( cairo_image_surface_get_width( input_data.common_circle_surface.get() ) )
+                                            * ( ( 1.0 - circle_intensity_scale ) + ( sound_intensity * circle_intensity_scale ) );
     project_common_circle_dest_rect.width = project_common_circle_dest_rect.width * ( double( VIDEO_WIDTH ) / 1920.0 );
     project_common_circle_dest_rect.height = project_common_circle_dest_rect.width;
     project_common_circle_dest_rect.x = 114.5 + ( ( 1804.5 - 114.5 ) * ( double( input_data.i ) / double( input_data.amount_output_frames ) ) )
