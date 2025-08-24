@@ -69,8 +69,6 @@ std::filesystem::path CircleVideoGenerator::project_temp_pictureset_path_;
 std::shared_ptr< CircleVideoGenerator::AudioData > CircleVideoGenerator::audio_data_ = nullptr;
 std::shared_ptr< CircleVideoGenerator::FrameInformation > CircleVideoGenerator::frame_information_ = nullptr;
 
-typedef std::pair< double, double > Point;
-
 void CircleVideoGenerator::init( std::filesystem::path const& project_path, std::filesystem::path const& common_path ) {
   logger_ = LoggerFactory::get_logger( "CircleVideoGenerator" );
   logger_->trace( "[init] enter: project_path: {:?}, common_path: {:?}", project_path.string(), common_path.string() );
@@ -268,18 +266,6 @@ void CircleVideoGenerator::prepare_surfaces() {
   logger_->debug( "[prepare_surfaces] frame_information_->static_text_surface: {}", static_cast< void* >( frame_information_->static_text_surface.get() ) );
 
   logger_->trace( "[prepare_surfaces] exit" );
-}
-
-Point catmullRom( Point const& p0, Point const& p1, Point const& p2, Point const& p3, double t ) {
-  double t2 = t * t;
-  double t3 = t2 * t;
-
-  return { 0.5
-               * ( ( 2.0 * p1.first ) + ( -p0.first + p2.first ) * t + ( 2.0 * p0.first - 5.0 * p1.first + 4.0 * p2.first - p3.first ) * t2
-                   + ( -p0.first + 3.0 * p1.first - 3.0 * p2.first + p3.first ) * t3 ),
-           0.5
-               * ( ( 2.0 * p1.second ) + ( -p0.second + p2.second ) * t + ( 2.0 * p0.second - 5.0 * p1.second + 4.0 * p2.second - p3.second ) * t2
-                   + ( -p0.second + 3.0 * p1.second - 3.0 * p2.second + p3.second ) * t3 ) };
 }
 
 void CircleVideoGenerator::prepare_fft() {
