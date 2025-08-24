@@ -4,6 +4,7 @@
 #include <cairo.h>
 #include <fftw3.h>
 #include <filesystem>
+#include <vector>
 
 #include "_spdlog.h"
 
@@ -15,17 +16,21 @@ class RegularVideoGenerator {
   static int32_t const IIR_FILTER_ORDER;
   static double const BASS_LP_CUTOFF;
   static double const BASS_HP_CUTOFF;
-  static uint16_t const EXTRA_FFT_SIZE;
-  static double const FFT_INPUT_SIZE_MULT;
+  static double const PCM_FRAME_COUNT_MULT;
   static double const EPILEPSY_WARNING_VISIBLE_SECONDS;
   static double const EPILEPSY_WARNING_FADEOUT_SECONDS;
   static uint32_t const FFTW_PLAN_FLAGS;
   static std::string const EPILEPSY_WARNING_HEADER_FONT;
   static std::string const EPILEPSY_WARNING_CONTENT_FONT;
+  static double const FFT_COMPUTE_ALPHA;
   static double const FFT_DISPLAY_MIN_FREQ;
-  static double const FFT_DISPLAY_MAX_FREQ;
-  static double const FFT_DISPLAY_MIN_MAG;
-  static double const FFT_DISPLAY_MAX_MAG;
+  static double const FFT_DISPLAY_MAG_DB_RANGE;
+  static uint32_t const FFT_DISPLAY_BIN_AMOUNT;
+
+  private:
+  static double FFT_DISPLAY_MAX_FREQ;
+  static double FFT_DISPLAY_MAX_MAG_DB;
+  static double FFT_DISPLAY_MIN_MAG_DB;
 
   private:
   struct AudioData {
@@ -52,22 +57,19 @@ class RegularVideoGenerator {
     std::shared_ptr< cairo_surface_t > common_circle_surface = nullptr;
     std::shared_ptr< cairo_surface_t > project_art_surface = nullptr;
     std::shared_ptr< cairo_surface_t > static_text_surface = nullptr;
-    std::shared_ptr< fftwf_plan_s > fft_plan = nullptr;
-    uint64_t fft_input_size;
-    std::shared_ptr< float[] > fft_input = nullptr;
-    std::shared_ptr< double[] > fft_window = nullptr;
-    uint64_t fft_output_size;
-    std::shared_ptr< fftwf_complex[] > fft_output = nullptr;
+    // list of (freq, mag_db)
+    std::shared_ptr< std::vector< std::pair< double, double > > > fft_display_values;
   };
   struct FrameInformation {
     size_t amount_output_frames;
     double pcm_frames_per_output_frame;
-    size_t fft_size;
     std::shared_ptr< cairo_surface_t > common_epilepsy_warning_surface = nullptr;
     std::shared_ptr< cairo_surface_t > common_bg_surface = nullptr;
     std::shared_ptr< cairo_surface_t > common_circle_surface = nullptr;
     std::shared_ptr< cairo_surface_t > project_art_surface = nullptr;
     std::shared_ptr< cairo_surface_t > static_text_surface = nullptr;
+    // list of list of (freq, mag_db)
+    std::vector< std::shared_ptr< std::vector< std::pair< double, double > > > > fft_display_values_per_frame;
     std::vector< std::vector< RegularVideoGenerator::ThreadInputData > > thread_input_lists;
     std::vector< std::thread > thread_list;
   };
@@ -82,8 +84,8 @@ class RegularVideoGenerator {
   static void prepare_audio();
   static void calculate_frames();
   static void prepare_surfaces();
-  static void prepare_threads();
   static void prepare_fft();
+  static void prepare_threads();
   static void start_threads();
   static void join_threads();
   static void clean_up();
@@ -92,6 +94,7 @@ class RegularVideoGenerator {
   static void save_surface( std::shared_ptr< cairo_surface_t > surface, std::filesystem::path const& file_path );
   static void create_lowpass_for_audio_data();
   static void create_epilepsy_warning();
+
   static void draw_samples_on_surface( std::shared_ptr< cairo_surface_t > surface, RegularVideoGenerator::ThreadInputData const& input_data );
   static void draw_freqs_on_surface( std::shared_ptr< cairo_surface_t > surface, RegularVideoGenerator::ThreadInputData const& input_data );
   static void thread_run( std::vector< RegularVideoGenerator::ThreadInputData > inputs );

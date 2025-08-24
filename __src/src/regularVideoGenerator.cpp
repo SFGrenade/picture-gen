@@ -1,6 +1,7 @@
 #include "regularVideoGenerator.h"
 
 #include <Iir.h>
+#include <cmath>
 #include <memory>
 
 #include "_dr_wav.h"
@@ -21,35 +22,23 @@ int32_t const RegularVideoGenerator::VIDEO_HEIGHT = 1080;
 int32_t const RegularVideoGenerator::IIR_FILTER_ORDER = 16;
 double const RegularVideoGenerator::BASS_LP_CUTOFF = 80.0;
 double const RegularVideoGenerator::BASS_HP_CUTOFF = 20.0;
-/*
-  0 => 1024
-  1 => 2048
-  2 => 4096
-  3 => 8192
-  4 => 16384
-  5 => 32768
-*/
-uint16_t const RegularVideoGenerator::EXTRA_FFT_SIZE = 3;
-/*
-  to keep 4096 samples:
-  0 => 4.0
-  1 => 2.0
-  2 => 1.0
-  3 => 0.5
-  4 => 0.25
-  5 => 0.125
-*/
-double const RegularVideoGenerator::FFT_INPUT_SIZE_MULT = 4.0 * std::pow< double >( 0.5, RegularVideoGenerator::EXTRA_FFT_SIZE );
+// amount of pcm samples played per frame * this = amount of pcm samples shown per frame
+double const RegularVideoGenerator::PCM_FRAME_COUNT_MULT = RegularVideoGenerator::FPS / 10.0;
 double const RegularVideoGenerator::EPILEPSY_WARNING_VISIBLE_SECONDS = 3.0;
 double const RegularVideoGenerator::EPILEPSY_WARNING_FADEOUT_SECONDS = 2.0;
 // uint32_t const RegularVideoGenerator::FFTW_PLAN_FLAGS = FFTW_EXHAUSTIVE;
 uint32_t const RegularVideoGenerator::FFTW_PLAN_FLAGS = FFTW_ESTIMATE;
 std::string const RegularVideoGenerator::EPILEPSY_WARNING_HEADER_FONT = "BarberChop.otf";
 std::string const RegularVideoGenerator::EPILEPSY_WARNING_CONTENT_FONT = "arial_narrow_7.ttf";
+// 0.0 = max smooth, 1.0 = no smooth
+double const RegularVideoGenerator::FFT_COMPUTE_ALPHA = 0.7;
 double const RegularVideoGenerator::FFT_DISPLAY_MIN_FREQ = 20.0;
-double const RegularVideoGenerator::FFT_DISPLAY_MAX_FREQ = 44100.0;
-double const RegularVideoGenerator::FFT_DISPLAY_MIN_MAG = -96.0;
-double const RegularVideoGenerator::FFT_DISPLAY_MAX_MAG = -10.0;
+double const RegularVideoGenerator::FFT_DISPLAY_MAG_DB_RANGE = 60.0;
+uint32_t const RegularVideoGenerator::FFT_DISPLAY_BIN_AMOUNT = 917;
+
+double RegularVideoGenerator::FFT_DISPLAY_MAX_FREQ = 22050.0;
+double RegularVideoGenerator::FFT_DISPLAY_MAX_MAG_DB = -std::numeric_limits< float >::max();
+double RegularVideoGenerator::FFT_DISPLAY_MIN_MAG_DB = std::numeric_limits< float >::max();
 
 spdlogger RegularVideoGenerator::logger_ = nullptr;
 bool RegularVideoGenerator::is_ready_ = false;
@@ -91,8 +80,10 @@ void RegularVideoGenerator::init( std::filesystem::path const& project_path, std
 
   project_temp_pictureset_path_ = project_path_ / "__pictures";
   if( std::filesystem::is_directory( project_temp_pictureset_path_ ) ) {
+    logger_->trace( "[init] deleting directory {:?}", project_temp_pictureset_path_.string() );
     std::filesystem::remove_all( project_temp_pictureset_path_ );
   }
+  logger_->trace( "[init] creating directory {:?}", project_temp_pictureset_path_.string() );
   std::filesystem::create_directory( project_temp_pictureset_path_ );
 
   is_ready_ = ready_val;
@@ -119,9 +110,9 @@ void RegularVideoGenerator::render() {
 
   prepare_surfaces();
 
-  prepare_threads();
-
   prepare_fft();
+
+  prepare_threads();
 
   start_threads();
 
@@ -174,15 +165,15 @@ void RegularVideoGenerator::calculate_frames() {
   frame_information_->pcm_frames_per_output_frame = double( audio_data_->total_pcm_frame_count ) / double( frame_information_->amount_output_frames );
   logger_->debug( "[calculate_frames] frame_information_->pcm_frames_per_output_frame: {}", frame_information_->pcm_frames_per_output_frame );
 
-  frame_information_->fft_size = 1;
-  while( frame_information_->fft_size < frame_information_->pcm_frames_per_output_frame ) {
-    frame_information_->fft_size = frame_information_->fft_size << 1;
-  }
-  for( int e = 0; e < EXTRA_FFT_SIZE; e++ ) {
-    // extra passes of fft size
-    frame_information_->fft_size = frame_information_->fft_size << 1;
-  }
-  logger_->debug( "[calculate_frames] frame_information_->fft_size: {}", frame_information_->fft_size );
+  // frame_information_->fft_size = 1;
+  // while( frame_information_->fft_size < frame_information_->pcm_frames_per_output_frame ) {
+  //   frame_information_->fft_size = frame_information_->fft_size << 1;
+  // }
+  // for( int e = 0; e < EXTRA_FFT_SIZE; e++ ) {
+  //   // extra passes of fft size
+  //   frame_information_->fft_size = frame_information_->fft_size << 1;
+  // }
+  // logger_->debug( "[calculate_frames] frame_information_->fft_size: {}", frame_information_->fft_size );
 
   logger_->trace( "[calculate_frames] exit" );
 }
@@ -199,11 +190,6 @@ void RegularVideoGenerator::prepare_surfaces() {
   frame_information_->common_bg_surface = surface_load_file( common_bg_path_ );
   frame_information_->common_circle_surface = surface_load_file( common_circle_path_ );
   frame_information_->project_art_surface = surface_load_file_into_overlay( project_art_path_, VIDEO_WIDTH, VIDEO_HEIGHT, 24, 24, 917, 812 );
-  logger_->debug( "[prepare_surfaces] frame_information_->common_epilepsy_warning_surface: {}",
-                  static_cast< void* >( frame_information_->common_epilepsy_warning_surface.get() ) );
-  logger_->debug( "[prepare_surfaces] frame_information_->common_bg_surface: {}", static_cast< void* >( frame_information_->common_bg_surface.get() ) );
-  logger_->debug( "[prepare_surfaces] frame_information_->common_circle_surface: {}", static_cast< void* >( frame_information_->common_circle_surface.get() ) );
-  logger_->debug( "[prepare_surfaces] frame_information_->project_art_surface: {}", static_cast< void* >( frame_information_->project_art_surface.get() ) );
   frame_information_->static_text_surface = surface_render_text_into_overlay( FontManager::get_font_face( "Roboto-Regular.ttf" ),
                                                                               project_title_path_,
                                                                               VIDEO_WIDTH,
@@ -212,9 +198,247 @@ void RegularVideoGenerator::prepare_surfaces() {
                                                                               24,
                                                                               917,
                                                                               387 );
+
+  logger_->debug( "[prepare_surfaces] frame_information_->common_epilepsy_warning_surface: {}",
+                  static_cast< void* >( frame_information_->common_epilepsy_warning_surface.get() ) );
+  logger_->debug( "[prepare_surfaces] frame_information_->common_bg_surface: {}", static_cast< void* >( frame_information_->common_bg_surface.get() ) );
+  logger_->debug( "[prepare_surfaces] frame_information_->common_circle_surface: {}", static_cast< void* >( frame_information_->common_circle_surface.get() ) );
+  logger_->debug( "[prepare_surfaces] frame_information_->project_art_surface: {}", static_cast< void* >( frame_information_->project_art_surface.get() ) );
   logger_->debug( "[prepare_surfaces] frame_information_->static_text_surface: {}", static_cast< void* >( frame_information_->static_text_surface.get() ) );
 
   logger_->trace( "[prepare_surfaces] exit" );
+}
+
+void RegularVideoGenerator::prepare_fft() {
+  logger_->trace( "[prepare_fft] enter" );
+
+  if( !is_ready_ ) {
+    logger_->error( "[prepare_fft] generator is not ready!" );
+    return;
+  }
+
+#pragma region init fft vals
+
+  uint64_t pcm_frame_count = uint64_t( double( frame_information_->pcm_frames_per_output_frame ) * PCM_FRAME_COUNT_MULT );
+  size_t fft_size = 1;
+  while( fft_size < pcm_frame_count ) {
+    fft_size = fft_size << 1;
+  }
+  size_t fft_output_size = fft_size / 2 + 1;
+  logger_->trace( "[prepare_fft] pcm_frame_count: {}", pcm_frame_count );
+  logger_->trace( "[prepare_fft] fft_size: {}", fft_size );
+  logger_->trace( "[prepare_fft] fft_output_size: {}", fft_output_size );
+
+  std::shared_ptr< double[] > fft_windows = std::make_shared< double[] >( fft_size );
+  nuttallwin_octave( fft_windows.get(), fft_size, false );
+  std::shared_ptr< float[] > signal_data_for_frame = std::make_shared< float[] >( fft_size );
+  std::shared_ptr< fftwf_complex[] > fft_output = std::make_shared< fftwf_complex[] >( fft_output_size );
+  fftwf_plan fft_plan = fftwf_plan_dft_r2c_1d( fft_size, signal_data_for_frame.get(), fft_output.get(), FFTW_PLAN_FLAGS );
+
+  double fft_display_min_mag_db = std::numeric_limits< float >::max();
+  double fft_display_max_mag_db = -std::numeric_limits< float >::max();
+
+  FFT_DISPLAY_MAX_FREQ = audio_data_->sample_rate / 2.0;
+
+#pragma endregion init fft vals
+
+#pragma region compute fft
+
+  double pcm_frame_offset_dbl = 0.0;
+  std::vector< std::vector< std::pair< double, double > > > fft_vals_per_frame;
+  fft_vals_per_frame.reserve( frame_information_->amount_output_frames );
+  for( size_t i = 0; i < frame_information_->amount_output_frames; i++ ) {
+    // played sample will be in the middle of the shown samples
+    int64_t pcm_frame_offset = std::min< int64_t >( audio_data_->total_pcm_frame_count, int64_t( pcm_frame_offset_dbl ) - int64_t( pcm_frame_count / 2 ) );
+    // logger_->debug( "[prepare_threads] output frame {} from sample {} to {}", i, pcm_frame_offset, pcm_frame_offset + ( pcm_frame_count - 1 ) );
+
+    for( int64_t si = 0; si < fft_size; si++ ) {
+      signal_data_for_frame[si] = 0.0f;
+    }
+    for( int64_t si = 0; si < fft_output_size; si++ ) {
+      fft_output[si][0] = 0.0f;
+      fft_output[si][1] = 0.0f;
+    }
+
+    for( uint64_t si = 0; si < pcm_frame_count; si++ ) {
+      int64_t sample_frame_index = ( pcm_frame_offset + int64_t( si ) );
+      if( sample_frame_index < 0 ) {
+        continue;
+      }
+      if( sample_frame_index >= int64_t( audio_data_->total_pcm_frame_count ) ) {
+        continue;
+      }
+
+      float average_sample = 0.0f;
+      for( uint32_t channel = 0; channel < audio_data_->channels; channel++ ) {
+        average_sample += audio_data_->sample_data[( sample_frame_index * audio_data_->channels ) + channel];
+      }
+
+      signal_data_for_frame[si] = ( average_sample / float( audio_data_->channels ) ) * fft_windows[si];
+    }
+
+    fftwf_execute( fft_plan );
+
+    std::vector< std::pair< double, double > > fft_output_vals;
+    fft_output_vals.reserve( fft_output_size - 1 );
+
+    for( uint32_t fi = 0; fi < fft_output_size - 1; fi++ ) {
+      double freq = double( fi + 1 ) * double( audio_data_->sample_rate ) / double( fft_size );
+
+      std::pair< double, double > val;
+      val.first = freq;
+      double mag_real = fft_output[fi + 1][0];
+      double mag_imag = fft_output[fi + 1][1];
+      double mag = std::sqrt( ( mag_real * mag_real ) + ( mag_imag * mag_imag ) );
+      val.second = mag;
+      fft_output_vals.push_back( val );
+    }
+    fft_vals_per_frame.push_back( fft_output_vals );
+
+    pcm_frame_offset_dbl += frame_information_->pcm_frames_per_output_frame;
+  }
+
+#pragma endregion compute fft
+
+#pragma region accumulate mags into bins
+
+  std::vector< std::vector< std::pair< double, double > > > fft_log_bins_per_frame;
+  fft_log_bins_per_frame.reserve( fft_vals_per_frame.size() );
+  int i = 0;  // frame index
+  for( std::vector< std::pair< double, double > > fft_vals : fft_vals_per_frame ) {
+    double freq_min = std::log10( FFT_DISPLAY_MIN_FREQ );
+    double freq_max = std::log10( FFT_DISPLAY_MAX_FREQ );
+
+    std::vector< std::pair< double, double > > fft_log_bins;
+    fft_log_bins.reserve( FFT_DISPLAY_BIN_AMOUNT + 1 );
+    for( uint32_t bin = 0; bin <= FFT_DISPLAY_BIN_AMOUNT; bin++ ) {
+      double bin_min_freq = std::pow( 10.0, freq_min + ( double( bin + 0 ) * ( freq_max - freq_min ) / double( FFT_DISPLAY_BIN_AMOUNT ) ) );
+      double bin_max_freq = std::pow( 10.0, freq_min + ( double( bin + 1 ) * ( freq_max - freq_min ) / double( FFT_DISPLAY_BIN_AMOUNT ) ) );
+
+      std::pair< double, double > val;
+      val.first = double( bin ) / double( FFT_DISPLAY_BIN_AMOUNT );
+      // accumulate magnitudes
+      val.second = 0.0;
+      for( std::pair< double, double > pair : fft_vals ) {
+        if( ( pair.first >= bin_min_freq ) && ( pair.first < bin_max_freq ) )
+          val.second += pair.second;
+      }
+      if( isnan( val.second ) || ( val.second <= 0.0 ) ) {
+        // no fft values for this frequency found, gonna have to fancy lerp this from other values
+
+        double fft_freq_bin = ( double( fft_size ) * bin_min_freq / audio_data_->sample_rate ) - 1.0;  // -1 because we skipped the first index earlier
+
+        int64_t a_index = int64_t( std::floor( fft_freq_bin ) );
+        int64_t b_index = int64_t( std::ceil( fft_freq_bin ) );
+        double t = fft_freq_bin - double( a_index );
+
+        val.second = catmullRom( fft_vals[a_index - 1], fft_vals[a_index], fft_vals[b_index], fft_vals[b_index + 1], t ).second;
+      }
+      // convert to dB
+      if( val.second < 0.0 )
+        val.second = 0.0;
+      val.second = 20.0 * std::log10( val.second + 1e-12 );
+
+      if( val.second < fft_display_min_mag_db ) {
+        fft_display_min_mag_db = val.second;
+      }
+      if( val.second > fft_display_max_mag_db ) {
+        fft_display_max_mag_db = val.second;
+      }
+      fft_log_bins.push_back( val );
+    }
+    fft_log_bins_per_frame.push_back( fft_log_bins );
+    i++;
+  }
+
+#pragma endregion accumulate mags into bins
+
+#pragma region min/max mag
+
+  FFT_DISPLAY_MAX_MAG_DB = std::ceil( fft_display_max_mag_db );
+  FFT_DISPLAY_MIN_MAG_DB = FFT_DISPLAY_MAX_MAG_DB - FFT_DISPLAY_MAG_DB_RANGE;
+  logger_->trace( "[prepare_fft] FFT_DISPLAY_MAX_MAG_DB: {}", FFT_DISPLAY_MAX_MAG_DB );
+  logger_->trace( "[prepare_fft] FFT_DISPLAY_MIN_MAG_DB: {}", FFT_DISPLAY_MIN_MAG_DB );
+
+#pragma endregion min / max mag
+
+#pragma region clamp fft display vals
+
+  std::vector< std::vector< std::pair< double, double > > > fft_display_vals_per_frame;
+  fft_display_vals_per_frame.reserve( fft_log_bins_per_frame.size() );
+  for( std::vector< std::pair< double, double > > fft_log_bins : fft_log_bins_per_frame ) {
+    std::vector< std::pair< double, double > > fft_display_vals;
+    fft_display_vals.reserve( fft_log_bins.size() );
+    for( std::pair< double, double > pair : fft_log_bins ) {
+      std::pair< double, double > val;
+      val.first = pair.first;
+      val.second = std::clamp( pair.second, FFT_DISPLAY_MIN_MAG_DB, FFT_DISPLAY_MAX_MAG_DB );
+      fft_display_vals.push_back( val );
+    }
+    fft_display_vals_per_frame.push_back( fft_display_vals );
+  }
+
+#pragma endregion clamp fft display vals
+
+#pragma region compute display vals
+
+  frame_information_->fft_display_values_per_frame.reserve( fft_display_vals_per_frame.size() );
+  for( std::vector< std::pair< double, double > > fft_display_vals : fft_display_vals_per_frame ) {
+    std::shared_ptr< std::vector< std::pair< double, double > > > formatted_fft_display_values
+        = std::make_shared< std::vector< std::pair< double, double > > >();
+    formatted_fft_display_values->reserve( fft_display_vals.size() );
+    for( uint32_t bin = 0; bin < fft_display_vals.size(); bin++ ) {
+      std::pair< double, double > pair = fft_display_vals[bin];
+      std::pair< double, double > val;
+      val.first = pair.first;
+      val.second = pair.second;
+      if( frame_information_->fft_display_values_per_frame.size() > 0 ) {
+        // apply smoothing
+        val.second
+            = ( FFT_COMPUTE_ALPHA * val.second ) + ( ( 1.0 - FFT_COMPUTE_ALPHA ) * frame_information_->fft_display_values_per_frame.back()->at( bin ).second );
+      }
+      formatted_fft_display_values->push_back( val );
+    }
+    frame_information_->fft_display_values_per_frame.push_back( formatted_fft_display_values );
+  }
+
+  // frame_information_->fft_display_values_per_frame.reserve( fft_display_vals_per_frame.size() );
+  // for( std::vector< std::pair< double, double > > fft_display_vals : fft_display_vals_per_frame ) {
+  //   std::shared_ptr< std::vector< std::pair< double, double > > > formatted_fft_display_values
+  //       = std::make_shared< std::vector< std::pair< double, double > > >();
+  //   formatted_fft_display_values->reserve( fft_display_vals.size() );
+
+  //   for( uint32_t bin = 0; bin < FFT_DISPLAY_BIN_AMOUNT; bin++ ) {
+  //     double relative_freq = double( bin ) / double( FFT_DISPLAY_BIN_AMOUNT - 1 );
+  //     // double relative_freq_log = std::log( double( bin ) ) / std::log( double( FFT_DISPLAY_BIN_AMOUNT - 1 ) );
+  //     // double freq = FFT_DISPLAY_MIN_FREQ + ( ( FFT_DISPLAY_MAX_FREQ - FFT_DISPLAY_MIN_FREQ ) * relative_freq_log );
+  //     double freq_log = FFT_DISPLAY_MIN_FREQ * std::pow( FFT_DISPLAY_MAX_FREQ / FFT_DISPLAY_MIN_FREQ, relative_freq );
+  //     double fft_freq_bin = ( double( fft_size ) * freq_log / audio_data_->sample_rate ) - 1.0;  // -1 because we skipped the first index earlier
+
+  //     int64_t a_index = int64_t( std::floor( fft_freq_bin ) );
+  //     int64_t b_index = int64_t( std::ceil( fft_freq_bin ) );
+  //     double t = fft_freq_bin - double( a_index );
+  //     std::pair< double, double > val;
+  //     val.first = freq_log;
+
+  //     // val.second = std::lerp( fft_display_vals[a_index].second, fft_display_vals[b_index].second, t );
+  //     val.second = catmullRom( fft_display_vals[a_index - 1], fft_display_vals[a_index], fft_display_vals[b_index], fft_display_vals[b_index + 1], t
+  //     ).second; if( frame_information_->fft_display_values_per_frame.size() > 0 ) {
+  //       // apply smoothing
+  //       val.second
+  //           = ( FFT_COMPUTE_ALPHA * val.second ) + ( ( 1.0 - FFT_COMPUTE_ALPHA ) * frame_information_->fft_display_values_per_frame.back()->at( bin ).second
+  //           );
+  //     }
+
+  //     formatted_fft_display_values->push_back( val );
+  //   }
+
+  //   frame_information_->fft_display_values_per_frame.push_back( formatted_fft_display_values );
+  // }
+
+#pragma endregion compute display vals
+
+  logger_->trace( "[prepare_fft] exit" );
 }
 
 void RegularVideoGenerator::prepare_threads() {
@@ -240,7 +464,8 @@ void RegularVideoGenerator::prepare_threads() {
     input_data.i = i;
     input_data.amount_output_frames = frame_information_->amount_output_frames;
     input_data.project_temp_pictureset_picture_path = project_temp_pictureset_path_ / fmt::format( "{}.png", i );
-    input_data.pcm_frame_count = uint64_t( double( frame_information_->fft_size ) * FFT_INPUT_SIZE_MULT );
+    input_data.pcm_frame_count = uint64_t( double( frame_information_->pcm_frames_per_output_frame ) * PCM_FRAME_COUNT_MULT );
+    // played sample will be in the middle of the shown samples
     input_data.pcm_frame_offset
         = std::min< int64_t >( audio_data_->total_pcm_frame_count, int64_t( pcm_frame_offset ) - int64_t( input_data.pcm_frame_count / 2 ) );
     input_data.audio_data_ptr = audio_data_;
@@ -249,10 +474,11 @@ void RegularVideoGenerator::prepare_threads() {
     input_data.common_circle_surface = frame_information_->common_circle_surface;
     input_data.project_art_surface = frame_information_->project_art_surface;
     input_data.static_text_surface = frame_information_->static_text_surface;
-    logger_->debug( "[prepare_threads] output frame {} from sample {} to {}",
-                    input_data.i,
-                    input_data.pcm_frame_offset,
-                    input_data.pcm_frame_offset + ( input_data.pcm_frame_count - 1 ) );
+    input_data.fft_display_values = frame_information_->fft_display_values_per_frame[i];
+    // logger_->debug( "[prepare_threads] output frame {} from sample {} to {}",
+    //                 input_data.i,
+    //                 input_data.pcm_frame_offset,
+    //                 input_data.pcm_frame_offset + ( input_data.pcm_frame_count - 1 ) );
 
     size_t thread_index = i % frame_information_->thread_input_lists.capacity();
     frame_information_->thread_input_lists[thread_index].push_back( input_data );
@@ -261,42 +487,6 @@ void RegularVideoGenerator::prepare_threads() {
   }
 
   logger_->trace( "[prepare_threads] exit" );
-}
-
-void RegularVideoGenerator::prepare_fft() {
-  logger_->trace( "[prepare_fft] enter" );
-
-  if( !is_ready_ ) {
-    logger_->error( "[prepare_fft] generator is not ready!" );
-    return;
-  }
-
-  for( auto& input_list : frame_information_->thread_input_lists ) {
-    size_t fft_input_size = frame_information_->fft_size;
-    std::shared_ptr< float[] > fft_input = std::make_shared< float[] >( fft_input_size );
-
-    std::shared_ptr< double[] > fft_window = std::make_shared< double[] >( fft_input_size );
-    blackmanharris( fft_window.get(), fft_input_size, false );  // create values for window function
-
-    size_t fft_output_size = frame_information_->fft_size / 2 + 1;
-    std::shared_ptr< fftwf_complex[] > fft_output = std::make_shared< fftwf_complex[] >( fft_output_size );
-    std::shared_ptr< fftwf_plan_s > fft_plan
-        = make_fftw_shared_ptr( fftwf_plan_dft_r2c_1d( frame_information_->fft_size, fft_input.get(), fft_output.get(), FFTW_PLAN_FLAGS ) );
-    if( !fft_plan ) {
-      logger_->error( "[prepare_fft] failed fftwf_plan_dft_r2c_1d!" );
-    }
-
-    for( auto& input_data : input_list ) {
-      input_data.fft_input_size = fft_input_size;
-      input_data.fft_input = fft_input;
-      input_data.fft_window = fft_window;
-      input_data.fft_output_size = fft_output_size;
-      input_data.fft_output = fft_output;
-      input_data.fft_plan = fft_plan;
-    }
-  }
-
-  logger_->trace( "[prepare_fft] exit" );
 }
 
 void RegularVideoGenerator::start_threads() {
@@ -358,14 +548,14 @@ void RegularVideoGenerator::clean_up() {
 }
 
 void RegularVideoGenerator::save_surface( std::shared_ptr< cairo_surface_t > surface, std::filesystem::path const& file_path ) {
-  logger_->trace( "[save_surface] enter: surface: {}, file_path: {:?}", static_cast< void* >( surface.get() ), file_path.string() );
+  // logger_->trace( "[save_surface] enter: surface: {}, file_path: {:?}", static_cast< void* >( surface.get() ), file_path.string() );
 
   cairo_status_t status = cairo_surface_write_to_png( surface.get(), file_path.string().c_str() );
   if( status != cairo_status_t::CAIRO_STATUS_SUCCESS ) {
     logger_->error( "[save_surface] error in save_surface: {}", cairo_status_to_string( status ) );
   }
 
-  logger_->trace( "[save_surface] exit" );
+  // logger_->trace( "[save_surface] exit" );
 }
 
 void RegularVideoGenerator::create_lowpass_for_audio_data() {
@@ -465,7 +655,7 @@ void RegularVideoGenerator::create_epilepsy_warning() {
 }
 
 void RegularVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surface_t > surface, RegularVideoGenerator::ThreadInputData const& input_data ) {
-  logger_->trace( "[draw_samples_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
+  // logger_->trace( "[draw_samples_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
 
   if( !is_ready_ ) {
     logger_->error( "[draw_samples_on_surface] generator is not ready!" );
@@ -481,7 +671,7 @@ void RegularVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surf
   double const surface_h = cairo_image_surface_get_height( surface.get() );
 
   double const middle_y = surface_h / 2.0;
-  double const frame_duration = static_cast< double >( input_data.pcm_frame_count );
+  double const frame_duration = double( input_data.pcm_frame_count );
   double prev_x = 0.0;
   double prev_y = middle_y;
   double x = 0.0;
@@ -496,11 +686,11 @@ void RegularVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surf
     prev_x = 0.0;
     prev_y = middle_y;
 
-    double red = std::pow( 0.5, static_cast< double >( c ) );
+    double red = std::pow( 0.5, double( c ) );
     cairo_set_source_rgb( cr, red, 0.0, 0.0 );
 
     for( int64_t i = 0; i < input_data.pcm_frame_count; i++ ) {
-      x = std::round( static_cast< float >( surface_w ) * ( static_cast< float >( i ) / static_cast< float >( frame_duration - 1 ) ) );
+      x = std::round( float( surface_w ) * ( float( i ) / float( frame_duration - 1 ) ) );
 
       // range: -1.0 to 1.0
       float sample = 0.0;
@@ -509,7 +699,7 @@ void RegularVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surf
         sample = audio_data_->sample_data[sample_index];
       }
 
-      y = std::round( static_cast< double >( middle_y ) + ( static_cast< double >( middle_y ) * sample ) );
+      y = std::round( double( middle_y ) + ( double( middle_y ) * sample ) );
 
       if( i == 0 ) {
         prev_x = x;
@@ -527,11 +717,11 @@ void RegularVideoGenerator::draw_samples_on_surface( std::shared_ptr< cairo_surf
   cairo_restore( cr );
   cairo_destroy( cr );
 
-  logger_->trace( "[draw_samples_on_surface] exit" );
+  // logger_->trace( "[draw_samples_on_surface] exit" );
 }
 
 void RegularVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surface_t > surface, RegularVideoGenerator::ThreadInputData const& input_data ) {
-  logger_->trace( "[draw_freqs_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
+  // logger_->trace( "[draw_freqs_on_surface] enter: surface: {}", static_cast< void* >( surface.get() ) );
 
   if( !is_ready_ ) {
     logger_->error( "[draw_freqs_on_surface] generator is not ready!" );
@@ -549,76 +739,93 @@ void RegularVideoGenerator::draw_freqs_on_surface( std::shared_ptr< cairo_surfac
   double const min_freq = std::max( 20.0, FFT_DISPLAY_MIN_FREQ );
   double const max_freq = std::min( double( audio_data_->sample_rate ) / 2.0, FFT_DISPLAY_MAX_FREQ );
 
-  // cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_BUTT );
-  cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
-  // // default is 2.0
-  // cairo_set_line_width( cr, 3.0 );
+  {
+    std::vector< std::pair< double, double > > freq_mags;
 
-  // per channel
-  for( int c = ( audio_data_->channels - 1 ); c >= 0; c-- ) {
-    double red = std::pow( 0.5, double( c + 1 ) );
-    cairo_set_source_rgb( cr, red, 0.0, 0.0 );
+    for( int64_t i = 0; i < input_data.fft_display_values->size(); i++ ) {
+      auto& pair = input_data.fft_display_values->at( i );
 
-    std::memset( input_data.fft_input.get(), 0, input_data.fft_input_size * sizeof( input_data.fft_input[0] ) );
-
-    for( int64_t i = 0; i < input_data.pcm_frame_count; i++ ) {
-      float w = input_data.fft_window[i];
-      if( ( ( input_data.pcm_frame_offset + i ) >= 0 ) && ( ( input_data.pcm_frame_offset + i ) < audio_data_->total_pcm_frame_count ) ) {
-        float sample = audio_data_->sample_data[( ( input_data.pcm_frame_offset + i ) * audio_data_->channels ) + c];
-        input_data.fft_input[i] = sample * w;
-      }
-    }
-
-    fftwf_execute( input_data.fft_plan.get() );
-
-    double x = 0.0;
-    double y = 0.0;
-
-    cairo_new_path( cr );
-    // start at bottom left corner
-    cairo_move_to( cr, 0.0, height );
-
-    for( size_t i = 1; i < input_data.fft_output_size; i++ ) {
-      double freq = static_cast< double >( i ) * audio_data_->sample_rate / static_cast< double >( input_data.fft_input_size );
-      // no need to continue if we draw a big polygon of a path
-      // if( freq < min_freq || freq > max_freq )
-      //   continue;
-
-      // either this
-      double compensation = std::sqrt( freq / min_freq );
-
-      double real = input_data.fft_output[i][0];
-      double imaginary = input_data.fft_output[i][1];
-      double mag = std::sqrt( real * real + imaginary * imaginary ) / input_data.fft_input_size;
-      // either this
-      mag *= compensation;
-      double mag_db = 20.0 * std::log10( mag + 1e-6 );  // Avoid log(0)
-      // or this
-      // mag_db += A_weighting_db( freq );  // Apply perceptual boost
+      double norm_x = pair.first;
+      double mag_db = pair.second;
 
       // Normalize
-      double norm_freq = ( freq - min_freq ) / ( max_freq - min_freq );
-      double norm_freq_log = ( std::log( freq ) - std::log( min_freq ) ) / ( std::log( max_freq ) - std::log( min_freq ) );
-      double norm_mag = ( mag_db - FFT_DISPLAY_MIN_MAG ) / ( FFT_DISPLAY_MAX_MAG - FFT_DISPLAY_MIN_MAG );
+      // double norm_x = bin / FFT_DISPLAY_BIN_AMOUNT;
+      // double norm_freq_log = ( std::log( freq ) - std::log( FFT_DISPLAY_MIN_FREQ ) ) / ( std::log( FFT_DISPLAY_MAX_FREQ ) - std::log( FFT_DISPLAY_MIN_FREQ )
+      // );
+      double norm_mag = ( mag_db - FFT_DISPLAY_MIN_MAG_DB ) / ( FFT_DISPLAY_MAX_MAG_DB - FFT_DISPLAY_MIN_MAG_DB );
       norm_mag = std::clamp( norm_mag, 0.0, 1.0 );
 
-      x = norm_freq_log * width;
-      y = height * ( 1.0 - norm_mag );
-
-      cairo_line_to( cr, x, y );
+      freq_mags.emplace_back( norm_x, norm_mag );
     }
-    // end at bottom right corner
-    cairo_line_to( cr, width, height );
-    cairo_close_path( cr );
 
-    // cairo_stroke( cr );
-    cairo_fill( cr );
+    std::vector< std::vector< std::pair< double, double > > > paths;
+    {
+      std::vector< double > dist_mults{ 1.0, 0.8, 0.6, 0.4, 0.2 };
+      double x = 0.0;
+      double y = 0.0;
+
+      for( auto& dist_mult : dist_mults ) {
+        std::vector< std::pair< double, double > > path;
+        path.emplace_back( 0, height );
+        for( auto it = freq_mags.begin(); it < freq_mags.end(); it++ ) {
+          x = it->first * width;
+          y = ( 1.0 - ( it->second * dist_mult ) ) * height;
+
+          path.emplace_back( x, y );
+        }
+        // now we should be at the right side
+        path.emplace_back( width, height );
+        paths.push_back( path );
+      }
+    }
+    {
+      std::vector< std::tuple< double, double, double > > colours{
+          { 0.75, 0.0, 0.0 },
+          { 0.625, 0.0, 0.0 },
+          { 0.5, 0.0, 0.0 },
+          { 0.375, 0.0, 0.0 },
+          { 0.25, 0.0, 0.0 },
+      };
+      // cairo_set_line_cap( cr, cairo_line_cap_t::CAIRO_LINE_CAP_ROUND );
+      cairo_set_line_width( cr, 1.0 );
+      // for( int i = paths.size() - 1; i >= 0; i-- ) {
+      //   auto& path = paths[i];
+      //   auto& colour = colours[i];
+      //   // add outlines
+      //   cairo_new_path( cr );
+
+      //   cairo_move_to( cr, path.front().first, path.front().second );
+      //   for( auto& point : path ) {
+      //     cairo_line_to( cr, point.first, point.second );
+      //   }
+      //   cairo_close_path( cr );
+
+      //   cairo_set_source_rgba( cr, 0.0, 0.0, 0.0, 0.6 - ( double( paths.size() - i ) * 0.1 ) );
+      //   cairo_fill( cr );
+      // }
+      for( int i = 0; i < paths.size(); i++ ) {
+        auto& path = paths[i];
+        auto& colour = colours[i];
+        // add outlines
+        cairo_new_path( cr );
+
+        cairo_move_to( cr, path.front().first, path.front().second );
+        for( auto& point : path ) {
+          cairo_line_to( cr, point.first, point.second );
+        }
+        cairo_close_path( cr );
+
+        cairo_set_source_rgba( cr, std::get< 0 >( colour ), std::get< 1 >( colour ), std::get< 2 >( colour ), 1.0 );
+        // cairo_stroke( cr );
+        cairo_fill( cr );
+      }
+    }
   }
 
   cairo_restore( cr );
   cairo_destroy( cr );
 
-  logger_->trace( "[draw_freqs_on_surface] exit" );
+  // logger_->trace( "[draw_freqs_on_surface] exit" );
 }
 
 void RegularVideoGenerator::thread_run( std::vector< RegularVideoGenerator::ThreadInputData > inputs ) {
@@ -676,15 +883,20 @@ void RegularVideoGenerator::thread_run( std::vector< RegularVideoGenerator::Thre
         bass_sample = std::clamp( bass_sample, -1.0, 1.0 );
         sound_sample = std::clamp( sound_sample, -1.0, 1.0 );
 
-        bass_rms_sum_value += std::pow( bass_sample, 2.0 );
-        rms_sum_value += std::pow( sound_sample, 2.0 );
+        bass_rms_sum_value += bass_sample * bass_sample;
+        rms_sum_value += sound_sample * sound_sample;
       }
     }
 
-    double const bass_intensity = std::sqrt( bass_rms_sum_value / (static_cast< double >( static_cast< double >( input_data.pcm_frame_count ) ) * static_cast< double >( input_data.pcm_frame_count )) );
-    double const sound_intensity = std::sqrt( rms_sum_value / (static_cast< double >( static_cast< double >( input_data.pcm_frame_count ) ) * static_cast< double >( input_data.pcm_frame_count )) );
+    double const bass_intensity = std::sqrt( bass_rms_sum_value / ( double( input_data.audio_data_ptr->channels ) * double( input_data.pcm_frame_count ) ) );
+    double const sound_intensity = std::sqrt( rms_sum_value / ( double( input_data.audio_data_ptr->channels ) * double( input_data.pcm_frame_count ) ) );
     double const circle_intensity_scale = 0.5;
     double const colour_displace_intensity_scale = 0.15;
+
+    // double const bass_intensity = 0.0;
+    // double const sound_intensity = 0.0;
+    // double const circle_intensity_scale = 0.5;
+    // double const colour_displace_intensity_scale = 0.15;
 
     project_common_circle_dest_rect.width = double( cairo_image_surface_get_width( input_data.common_circle_surface.get() ) )
                                             * ( ( 1.0 - circle_intensity_scale ) + ( sound_intensity * circle_intensity_scale ) );
