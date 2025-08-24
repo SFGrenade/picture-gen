@@ -975,13 +975,17 @@ void CircleVideoGenerator::thread_run( std::vector< CircleVideoGenerator::Thread
         bass_sample = std::clamp( bass_sample, -1.0, 1.0 );
         sound_sample = std::clamp( sound_sample, -1.0, 1.0 );
 
-        bass_rms_sum_value += std::pow( bass_sample, 2.0 );
-        rms_sum_value += std::pow( sound_sample, 2.0 );
+        bass_rms_sum_value += bass_sample * bass_sample;
+        rms_sum_value += sound_sample * sound_sample;
       }
     }
 
-    double const bass_intensity = std::sqrt( bass_rms_sum_value / (static_cast< double >( static_cast< double >( input_data.pcm_frame_count ) ) * static_cast< double >( input_data.pcm_frame_count )) );
-    double const sound_intensity = std::sqrt( rms_sum_value / (static_cast< double >( static_cast< double >( input_data.pcm_frame_count ) ) * static_cast< double >( input_data.pcm_frame_count )) );
+    double const bass_intensity = std::sqrt(
+        bass_rms_sum_value
+        / ( static_cast< double >( static_cast< double >( input_data.audio_data_ptr->channels ) ) * static_cast< double >( input_data.pcm_frame_count ) ) );
+    double const sound_intensity = std::sqrt(
+        rms_sum_value
+        / ( static_cast< double >( static_cast< double >( input_data.audio_data_ptr->channels ) ) * static_cast< double >( input_data.pcm_frame_count ) ) );
     double const bg_intensity_scale = 0.5;
     double const circle_intensity_scale = 0.5;
     double const colour_displace_intensity_scale = 0.15;
